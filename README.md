@@ -2,100 +2,131 @@
 
 Let **Claude Code** (`claude`) and **Antigravity** (`agy`) talk to each other through their CLIs: debate a question, plan a design, or build and review a project together, taking turns until both agree it's done.
 
+Run `agent-bridge` for an interactive app in the style of Claude Code, with `/` commands, model pickers, live streaming and a status bar. You can also pass a topic for a one-shot run from scripts.
+
 ```
  you ──topic──► agent-bridge
-                  ├─► claude -p  (session pinned by ID) ──reply──┐
-                  ◄──────────────────────────────────────────────┘
+                  ├─► claude  (session pinned by ID) ──reply──┐
+                  ◄────────────────────────────────────────────┘
                   │  relays it as "Claude said: …"
-                  ├─► agy -p     (conversation pinned by ID) ──reply──┐
-                  ◄────────────────────────────────────────────────────┘
+                  ├─► agy     (conversation pinned by ID) ──reply──┐
+                  ◄─────────────────────────────────────────────────┘
                   └─ repeats until both say [[DONE]] or the turn limit is hit
 ```
 
-## Features
-
-- **Pinned sessions:** each agent's conversation is resumed by its exact ID. `-c/--continue` is never used, so the bridge can't attach to an unrelated conversation.
-- **Isolated runs:** every run gets `runs/<timestamp>/` with its own workspace, a live `transcript.md`, and a `state.json`.
-- **Small prompts:** each agent keeps its own history, so only the other agent's latest message is sent each turn.
-- **Two-sided stop:** when one agent says it's done, the other gets one turn to confirm or object. A hard turn cap always applies.
-- **Survives failures:** per-call timeouts and retries. Ctrl+C or an error saves state, and `--resume` continues where it stopped.
-- **Role presets:** `debate`, `build-review`, `plan`, `brainstorm`, or your own roles.
-- **No dependencies:** Python 3 standard library only.
-
-## Requirements
-
-- Python 3.9+
-- [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
-- Antigravity CLI (`agy`), logged in
-
-Both CLIs use your existing logins. With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns count against your subscription usage limits rather than being billed per token. The `$` figures the bridge prints are API-price estimates, not charges.
-
 ## Install
+
+Requirements: Python 3.11+, and the [Claude Code](https://claude.com/claude-code) and Antigravity CLIs, both logged in.
 
 ```bash
 git clone git@github.com:dprincepiriyan/agent-bridge.git ~/agent-bridge
-chmod +x ~/agent-bridge/bridge.py
-ln -sf ~/agent-bridge/bridge.py ~/.local/bin/agent-bridge   # make sure ~/.local/bin is on PATH
+~/agent-bridge/install.sh
+```
+
+The installer uses `uv` if you have it. Otherwise it creates a private virtual environment in `~/.local/share/agent-bridge/venv`. Either way it puts `agent-bridge` in `~/.local/bin`. The install is editable, so after a `git pull` the command uses the new code immediately.
+
+With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns count against your subscription limits and aren't billed per token. The `~$` figures are API-price estimates, not charges.
+
+## Interactive app
+
+```
+$ agent-bridge
+╭─ agent-bridge v0.2.0 ──────────────────────────────────────────────╮
+│ Claude: default   Antigravity: gemini-3.8-flash-low                │
+│ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
+╰────────────────────────────────────────────────────────────────────╯
+❯ Is Go or Rust better for a first CLI tool?
+▶ Turn 1/8 · Claude ──────────────────────────────────────────────────
+Antigravity, I'll take the first position: Go is the better choice…
+ claude:default │ agy:gemini-3.8-flash-low │ debate │ turn 0/8 │ ⠦ Claude working 3s
+```
+
+- **Type a topic** to start a conversation.
+- **Type while they work** to steer. Your message goes to the agent that replies next, marked "The user says:".
+- **Esc** or **Ctrl+C** interrupts the current turn. Progress is saved.
+- **After a run ends,** typing continues the same conversation, with both agents keeping their context. `/new` starts a fresh topic.
+- **Tab / ↑↓** complete commands and arguments. History persists across sessions (Ctrl+R searches it).
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `/help` | List all commands |
+| `/model [agent] [model]` | Pick a model per agent (Antigravity's list comes from `agy models`) |
+| `/effort [agent] [level]` | Reasoning effort: low, medium, high, xhigh, max |
+| `/mode [mode]` | Type of work: `build-review`, `plan`, `debate`, `brainstorm`, `custom` |
+| `/roles` | Write custom roles for each agent |
+| `/turns [n]` | Max turns for this conversation and the default for new ones |
+| `/first [agent]` | Who speaks first |
+| `/perms [level]` | `none` (talk only) · `edits` (auto-accept file edits) · `auto` (edits + commands) |
+| `/workdir [path]` | Shared project folder (`default` = isolated per-run workspace) |
+| `/spec <file>` | Start a conversation using a file (e.g. `SPEC.md`) as the task |
+| `/pause` · `/stop` · `/continue [n]` | Pause after this turn · interrupt now · run more turns |
+| `/new` | Start a fresh conversation |
+| `/resume [run]` · `/runs` | Load a past conversation · list them |
+| `/transcript [run]` | Open a transcript in your pager |
+| `/status` | Settings, sessions, tokens and cost |
+| `/config [show\|save\|reset]` | Save the current settings as your defaults |
+| `/clear` · `/exit` | Clear the screen · quit |
+
+Defaults live in `~/.config/agent-bridge/config.toml`. Use `/config save`, or edit the file by hand.
+
+## One-shot mode (scripts)
+
+```bash
+agent-bridge "Should a 3-person startup use microservices?" -P debate
+agent-bridge "$(cat SPEC.md)" -P build-review --perms auto --workdir ~/projects/myapp -n 20
+agent-bridge "…" --claude-model opus --agy-model gemini-3.8-flash-high --agy-effort high
+agent-bridge --resume ~/.local/share/agent-bridge/runs/20261121-113652 -n 12
 agent-bridge --help
 ```
 
-## Usage
+Command-line flags override your saved defaults.
 
-```bash
-# Debate (talk only, no tools)
-agent-bridge "Should a 3-person startup use microservices?" -P debate
+## Building real projects
 
-# Plan a design, Antigravity speaks first
-agent-bridge "Design the data model for a habit tracker" -P plan -f agy -n 6
-
-# Build and review in a real project folder
-agent-bridge "$(cat SPEC.md)" -P build-review --perms auto --workdir ~/projects/myapp -n 20
-
-# Continue a previous run (-n sets the new total turn cap)
-agent-bridge --resume ~/agent-bridge/runs/20261121-113652 -n 12
-```
-
-Follow along in another terminal:
-
-```bash
-tail -f ~/agent-bridge/runs/<run>/transcript.md
-```
-
-### Options
-
-| Option | Default | Description |
-|---|---|---|
-| `topic` | (required) | Topic or task. Use `"$(cat SPEC.md)"` for long specs. |
-| `-P, --preset` | `build-review` | `debate`, `build-review`, `plan`, `brainstorm` |
-| `--role-a`, `--role-b` | preset | Custom roles for the first and second speaker |
-| `-f, --first` | `claude` | Who speaks first: `claude` or `agy` |
-| `-n, --turns` | `8` | Maximum total turns |
-| `--perms` | `none` | `none`: talk only · `edits`: auto-accept file edits · `auto`: each CLI's auto mode (can run commands) |
-| `--workdir` | per-run workspace | Shared folder both agents work in |
-| `--timeout` | `600` | Seconds per agent call |
-| `--retries` | `2` | Retries per failed call |
-| `--max-words` | `350` | Suggested length per message |
-| `--stop-token` | `[[DONE]]` | Token both agents must emit to finish |
-| `--claude-model`, `--agy-model` | CLI default | Model for each agent |
-| `--resume RUN_DIR` | | Continue a saved run |
-
-## Building complex projects
-
-1. **Use git.** Point `--workdir` at a git repo so you can review and roll back whatever the agents do.
+1. **Use git.** Point the workdir (`/workdir` or `--workdir`) at a git repo so you can review and roll back whatever the agents do.
 2. **Write a spec** (`SPEC.md`) with goals, requirements, and a clear **"Done when"** section. That section is what lets the agents agree to stop.
-3. **Work in phases.** Run `-P plan` to agree on a design, then `-P build-review` per milestone, and commit between runs.
-4. **Use `--perms auto`** if the agents need to run tests. With `edits` they can change files but can't run commands.
-5. **Give the reviewer teeth.** For example: `--role-b "QA: run the tests, try to break it, list concrete bugs with file:line"`.
-6. **If they loop without progress,** press Ctrl+C, tighten the spec, and resume or start the next phase.
+3. **Work in phases.** Use `/mode plan` to agree on a design, then `/mode build-review` per milestone, and commit between runs.
+4. **Use `/perms auto`** if the agents need to run tests. With `edits` they can change files but can't run commands.
+5. **Give the reviewer teeth** with `/roles`, e.g. *"QA: run the tests, try to break it, list concrete bugs with file:line"*.
+6. **Steer as you go.** Type into the running conversation, and press Esc if they loop.
+
+## Where things are stored
+
+| What | Where |
+|---|---|
+| Runs (transcripts, `state.json`, workspaces) | `~/.local/share/agent-bridge/runs/` |
+| Defaults | `~/.config/agent-bridge/config.toml` |
+| Input history | `~/.local/state/agent-bridge/history` |
+| Antigravity model list cache (24h) | `~/.cache/agent-bridge/` |
+
+Runs from v0.1 (`~/agent-bridge/runs`) are moved there automatically.
+
+## How it works
+
+- **Pinned sessions:** Claude runs with `--session-id`/`--resume <id>` and Antigravity with `--conversation <id>`. `-c/--continue` is never used, so the bridge can't attach to an unrelated conversation.
+- **Small prompts:** each agent keeps its own history, so only the partner's latest message (plus any of yours) is sent each turn.
+- **Two-sided stop:** when one agent ends with `[[DONE]]`, the other gets one turn to confirm or object.
+- **Survives failures:** per-call timeouts kill the whole process tree, failed calls are retried, and state is saved atomically after every turn.
+
+## Development
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest                                  # offline: uses fake agents
+AGENT_BRIDGE_FAKE=1 .venv/bin/agent-bridge        # try the UI without spending quota
+```
+
+Code layout: `engine.py` (turn loop, UI-agnostic), `agents/` (one adapter per CLI), `tui/` (interactive app), `render.py` (output), `store.py` (runs), `config.py` (defaults). See [PLAN.md](PLAN.md) for the design.
 
 ## Safety
 
-- `--perms edits` and `--perms auto` let **both** agents change files in the working directory, and `auto` also lets them run commands within each CLI's auto-mode safeguards. Only point `--workdir` at folders you're willing to have modified, ideally under version control.
-- `runs/` contains transcripts and session IDs and is git-ignored. Don't commit it.
+`edits` and `auto` let **both** agents change files in the working directory, and `auto` also lets them run commands within each CLI's auto-mode safeguards. Only point the workdir at folders you're willing to have modified, ideally under version control.
 
 ## Known quirk
 
-`agy -p --output-format json "…"` fails because `agy` takes the token after `-p` as the prompt. The bridge uses the attached form `--print=<prompt>` to avoid this.
+`agy -p --output-format json "…"` fails because `agy` takes the token after `-p` as the prompt. The bridge uses the attached form `--print=<prompt>`.
 
 ## License
 

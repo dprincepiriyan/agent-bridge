@@ -83,3 +83,16 @@ pyproject.toml
 4. Settings commands and the config file.
 5. Run control: background runs, Esc, interjecting, pause/continue/stop, resume picker, runs and transcripts.
 6. Polish: installation, run migration, README, version, final tests.
+
+## Status
+
+All six phases were implemented in v0.2.0:
+
+- [x] 1. Package, engine and adapter layout. One-shot mode kept.
+- [x] 2. Live streaming (stream-json for both CLIs).
+- [x] 3. Interactive app: prompt, `/` autocomplete, `/help`, status bar.
+- [x] 4. Settings commands (`/model`, `/effort`, `/mode`, `/roles`, `/turns`, `/first`, `/perms`, `/workdir`) and `config.toml`.
+- [x] 5. Run control: background runs, Esc/Ctrl+C, steering mid-run, `/pause`, `/stop`, `/continue`, `/resume`, `/runs`, `/transcript`.
+- [x] 6. `install.sh` (uv or private venv), v0.1 run migration, README, 29 offline tests.
+
+Deviation: `install.sh` falls back to a private virtual environment when `uv` isn't installed, so `uv` is optional.
