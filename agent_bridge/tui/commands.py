@@ -35,14 +35,16 @@ class Command:
     aliases: tuple[str, ...] = ()
     args: Callable[["App", list[str]], Iterable[str]] | None = None  # completions for the next arg
     paths: bool = False  # complete the argument as a filesystem path
+    search: bool = False  # complete using the whole argument text as a search query
 
 
 REGISTRY: dict[str, Command] = {}
 
 
-def command(name: str, help: str, usage: str = "", aliases: tuple[str, ...] = (), args=None, paths=False):
+def command(name: str, help: str, usage: str = "", aliases: tuple[str, ...] = (), args=None, paths=False,
+            search=False):
     def deco(fn: Handler) -> Handler:
-        cmd = Command(name, help, fn, usage, aliases, args, paths)
+        cmd = Command(name, help, fn, usage, aliases, args, paths, search)
         REGISTRY[name] = cmd
         for al in aliases:
             REGISTRY.setdefault(al, cmd)
@@ -84,6 +86,10 @@ class SlashCompleter(Completer):
             yield from self.paths.get_completions(Document(rest, len(rest)), complete_event)
             return
         if not cmd.args:
+            return
+        if cmd.search:  # e.g. /resume pizza debate → runs matching those words
+            for value, display, meta in cmd.args(self.app, rest):
+                yield Completion(value, start_position=-len(rest), display=display, display_meta=meta)
             return
         parts = rest.split(" ")
         done, current = parts[:-1], parts[-1]
@@ -413,44 +419,61 @@ async def cmd_continue(app: "App", args: list[str]) -> None:
     app.start_run()
 
 
-def _runs_args(app, done):
-    return [r["name"] for r in store.list_runs(30)] if not done else []
+def _runs_args(app, query: str):
+    runs = store.search_runs(query, store.list_runs(60)) if query.strip() else store.list_runs(30)
+    return [(r["name"], store.run_when(r["name"]), store.run_summary(r)) for r in runs[:30]]
 
 
-@command("resume", "Load a past conversation", "[run]", args=_runs_args)
+def _run_options(runs: list[dict]):
+    return [(str(r["dir"]), store.run_when(r["name"]), store.run_summary(r, 80)) for r in runs]
+
+
+@command("resume", "Load a past conversation (type words to search topics)", "[run|search]",
+         args=_runs_args, search=True)
 async def cmd_resume(app: "App", args: list[str]) -> None:
     if not _need_idle(app, "switch conversations"):
         return
-    runs = store.list_runs(40)
+    runs = store.list_runs(60)
     if not runs:
         app.warn("No saved runs yet.")
         return
-    if args:
-        match = [r for r in runs if r["name"] == args[0]] or (
-            [{"dir": Path(args[0]).expanduser()}] if Path(args[0]).expanduser().is_dir() else [])
-        if not match:
-            app.warn(f"No run named {args[0]}.")
-            return
-        run_dir = match[0]["dir"]
+    query = " ".join(args).strip()
+    exact = [r for r in runs if r["name"] == query]
+    if exact:
+        run_dir = exact[0]["dir"]
+    elif query and Path(query).expanduser().is_dir():
+        run_dir = Path(query).expanduser()
     else:
-        opts = [(str(r["dir"]), r["name"],
-                 f"{r['turn']}/{r['max_turns']}{' ✔' if r['finished'] else ''} · {_short(r['topic'], 60)}")
-                for r in runs]
-        choice = await pick("Resume which conversation?", opts)
-        if choice is None:
+        matches = store.search_runs(query, runs) if query else runs
+        if not matches:
+            app.warn(f"No conversation matches \"{query}\". /runs lists them all.")
             return
-        run_dir = Path(choice)
+        if len(matches) == 1 and query:
+            run_dir = matches[0]["dir"]
+        else:
+            title = f"Resume which conversation? ({len(matches)} match \"{query}\")" if query else \
+                "Resume which conversation?"
+            choice = await pick(title, _run_options(matches[:30]))
+            if choice is None:
+                return
+            run_dir = Path(choice)
     try:
         app.engine = Engine.load(run_dir, app.adapters, app.renderer)
     except (OSError, ValueError, KeyError) as e:
         app.warn(f"Couldn't load {run_dir}: {e}")
         return
     st = app.engine.state
-    app.info(f"Loaded {Path(st['run_dir']).name} — turn {st['turn']}/{st['max_turns']}"
-             f"{' (finished)' if st['finished'] else ''}\n  Topic: {_short(st['topic'], 200)}")
+    name = Path(st["run_dir"]).name
+    app.info(f"Loaded: {store.run_when(name)} · {st.get('preset', '')} · turn {st['turn']}/{st['max_turns']}"
+             f"{' · finished' if st['finished'] else ''}\n  Topic: {_short(st['topic'], 200)}")
+    summary = Path(st["run_dir"]) / "summary.md"
+    if summary.exists():
+        lines = [l for l in summary.read_text().splitlines()[1:] if l.strip() and not l.startswith("#")]
+        if lines:
+            app.console.print(Text(f"  {summary.name}: {_short(' '.join(lines[:3]), 300)}", style="dim"))
     if st.get("last_msg"):
         who = NAMES.get(st.get("last_speaker") or "", "Last")
-        app.console.print(Text(f"  {who}: {_short(st['last_msg'], 300)}", style="dim"))
+        app.console.print(Text(f"  Last — {who}: {_short(st['last_msg'], 300)}", style="dim"))
     app.info("Type a message to steer it, or /continue.")
 
 
@@ -466,20 +489,36 @@ async def cmd_runs(app: "App", args: list[str]) -> None:
         app.info("No saved runs yet.")
         return
     t = Table(box=None, padding=(0, 2), header_style="bold")
-    t.add_column("run")
+    t.add_column("when")
+    t.add_column("mode")
     t.add_column("turns", justify="right")
     t.add_column("")
     t.add_column("topic")
     for r in runs:
-        t.add_row(r["name"], f"{r['turn']}/{r['max_turns']}", "✔" if r["finished"] else "", _short(r["topic"], 70))
+        t.add_row(store.run_when(r["name"]), r.get("preset", ""), f"{r['turn']}/{r['max_turns']}",
+                  "✔" if r["finished"] else "", _short(r["topic"], 60))
     app.console.print(t)
-    app.console.print(Text(f"Stored in {store.runs_dir()} · /resume <run> to load one", style="dim"))
+    app.console.print(Text(f"Stored in {store.runs_dir()} · /resume <words from the topic> to load one",
+                           style="dim"))
 
 
-@command("transcript", "Open the conversation transcript in a pager", "[run]", args=_runs_args)
+@command("transcript", "Open the conversation transcript in a pager", "[run|search]", args=_runs_args,
+         search=True)
 async def cmd_transcript(app: "App", args: list[str]) -> None:
     if args:
-        path = store.runs_dir() / args[0] / "transcript.md"
+        query = " ".join(args)
+        runs = store.list_runs(60)
+        hit = [r for r in runs if r["name"] == query] or store.search_runs(query, runs)
+        if not hit:
+            app.warn(f"No conversation matches \"{query}\".")
+            return
+        if len(hit) > 1:
+            choice = await pick("Which transcript?", _run_options(hit[:30]))
+            if choice is None:
+                return
+            path = Path(choice) / "transcript.md"
+        else:
+            path = hit[0]["dir"] / "transcript.md"
     elif app.engine:
         path = store.transcript_path(app.engine.state)
     else:

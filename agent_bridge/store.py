@@ -97,10 +97,41 @@ def list_runs(limit: int | None = None) -> list[dict]:
         out.append({
             "dir": d, "name": d.name, "topic": s.get("topic", ""),
             "turn": s.get("turn", 0), "max_turns": s.get("max_turns", 0),
-            "finished": s.get("finished", False),
+            "finished": s.get("finished", False), "preset": s.get("preset", ""),
+            "last_speaker": s.get("last_speaker"), "last_msg": s.get("last_msg") or "",
         })
         if limit and len(out) >= limit:
             break
+    return out
+
+
+def run_when(name: str) -> str:
+    """'20261121-212534' → 'Today 21:25' / 'Yesterday 21:25' / 'Sat 21 Nov 21:25'."""
+    try:
+        t = dt.datetime.strptime(name[:15], "%Y%m%d-%H%M%S")
+    except ValueError:
+        return name
+    days = (dt.date.today() - t.date()).days
+    day = "Today" if days == 0 else "Yesterday" if days == 1 else t.strftime("%a %d %b" if days < 300 else "%d %b %Y")
+    return f"{day} {t:%H:%M}"
+
+
+def run_summary(r: dict, width: int = 70) -> str:
+    """One line: mode · progress · topic."""
+    topic = " ".join((r.get("topic") or "").split())
+    topic = topic if len(topic) <= width else topic[: width - 1] + "…"
+    status = "✔ done" if r.get("finished") else f"{r.get('turn', 0)}/{r.get('max_turns', 0)} turns"
+    return " · ".join(x for x in (r.get("preset"), status, topic) if x)
+
+
+def search_runs(query: str, runs: list[dict]) -> list[dict]:
+    """Runs whose name, topic or mode contain every word of query."""
+    words = query.lower().split()
+    out = []
+    for r in runs:
+        hay = f"{r['name']} {r.get('preset', '')} {r.get('topic', '')}".lower()
+        if all(w in hay for w in words):
+            out.append(r)
     return out
 
 

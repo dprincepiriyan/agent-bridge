@@ -68,7 +68,7 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/judge [agent\|auto on\|auto off]` | Who judges, and whether debates get a verdict automatically |
 | `/pause` · `/stop` · `/continue [n]` | Pause after this turn · interrupt now · run more turns |
 | `/new` | Start a fresh conversation |
-| `/resume [run]` · `/runs` | Load a past conversation · list them |
+| `/resume [words]` · `/runs` | Load a past conversation; the menu shows date, mode, progress and topic, and typing words filters by topic (`/resume pizza`) · list them all |
 | `/transcript [run]` | Open a transcript in your pager |
 | `/status` | Settings, sessions, tokens, cost and Claude usage |
 | `/config [show\|save\|reset]` | Save the current settings as your defaults |

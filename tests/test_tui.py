@@ -187,3 +187,54 @@ def test_model_name_with_spaces(monkeypatch):
 
     app = run_script(monkeypatch, script)
     assert app.settings.agy_model == "gemini-4-argon-low"
+
+
+def _make_runs():
+    from agent_bridge.agents.fake import FakeAdapter
+    from agent_bridge.engine import Engine
+    ad = {"claude": FakeAdapter("claude"), "agy": FakeAdapter("agy")}
+    names = []
+    for topic, preset in (("Tabs vs spaces forever", "debate"), ("Build a pizza ordering CLI", "build-review"),
+                          ("Plan a pizza party", "plan")):
+        eng = Engine.new(Settings(turns=2, preset=preset), topic, ad)
+        asyncio.run(eng.run())
+        names.append(eng.run_dir.name)
+    return names
+
+
+def test_resume_completion_shows_topics(monkeypatch):
+    monkeypatch.setenv("AGENT_BRIDGE_FAKE", "1")
+    from prompt_toolkit.document import Document
+    _make_runs()
+    comp = commands.SlashCompleter(object())
+
+    def comps(text):
+        return list(comp.get_completions(Document(text), None))
+
+    all_runs = comps("/resume ")
+    assert len(all_runs) == 3
+    metas = [c.display_meta_text for c in all_runs]
+    assert any("Tabs vs spaces forever" in m and "debate" in m for m in metas)
+    assert all(c.display_text.startswith("Today ") for c in all_runs)
+    pizza = comps("/resume pizza")
+    assert len(pizza) == 2
+    assert len(comps("/resume pizza party")) == 1
+    assert comps("/resume pizza party")[0].start_position == -len("pizza party")
+
+
+def test_resume_by_search_words(monkeypatch):
+    _make_runs()
+
+    async def script(app, inp):
+        inp.send_text("/resume tabs\r")  # single match → loads directly
+        await wait_for(lambda: app.engine is not None)
+        assert app.engine.state["topic"] == "Tabs vs spaces forever"
+        inp.send_text("/new\r")
+        await wait_for(lambda: app.engine is None)
+        inp.send_text("/resume pizza\r")  # two matches → picker
+        await asyncio.sleep(0.4)
+        inp.send_text("1")
+        await wait_for(lambda: app.engine is not None)
+
+    app = run_script(monkeypatch, script)
+    assert "pizza" in app.engine.state["topic"].lower()
