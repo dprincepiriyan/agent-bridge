@@ -53,6 +53,7 @@ class App:
         self.should_exit = False
         self.model_cache: dict[str, list[tuple[str, str]]] = {}
         self._last_ctrl_c = 0.0
+        self._fetching: dict[str, asyncio.Task] = {}
         config.state_dir().mkdir(parents=True, exist_ok=True)
         self.session: PromptSession = PromptSession(
             history=FileHistory(str(config.state_dir() / "history")),
@@ -75,9 +76,40 @@ class App:
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
 
+    def prefetch_models(self, agent: str | None = None) -> None:
+        """Make model lists available for /model: instantly from cache, refreshed in the background."""
+        for a in ([agent] if agent else AGENTS):
+            if a not in self.model_cache:
+                cached, fresh = self.adapters[a].cached_models()
+                if cached:
+                    self.model_cache[a] = cached
+                    if fresh:
+                        continue
+            elif agent is None:
+                continue
+            if a in self._fetching:
+                continue
+            self._fetching[a] = asyncio.get_running_loop().create_task(self._load_models(a))
+
+    async def _load_models(self, agent: str, refresh: bool = False) -> list[tuple[str, str]]:
+        try:
+            models = await self.adapters[agent].list_models(refresh=refresh)
+            if models:
+                self.model_cache[agent] = models
+            return self.model_cache.get(agent, [])
+        finally:
+            self._fetching.pop(agent, None)
+            buf = self.session.default_buffer
+            if buf.text.startswith("/model"):
+                buf.start_completion(select_first=False)  # refresh an open menu
+            if (app := get_app_or_none()) is not None:
+                app.invalidate()
+
     async def models(self, agent: str, refresh: bool = False) -> list[tuple[str, str]]:
+        if agent in self._fetching and not refresh:  # share an in-flight fetch
+            return await asyncio.shield(self._fetching[agent])
         if refresh or agent not in self.model_cache:
-            self.model_cache[agent] = await self.adapters[agent].list_models(refresh=refresh)
+            return await self._load_models(agent, refresh)
         return self.model_cache[agent]
 
     # ---- key bindings & toolbar ------------------------------------------
@@ -212,6 +244,7 @@ class App:
 
     async def main(self) -> int:
         self.banner()
+        self.prefetch_models()
         with patch_stdout(raw=True):
             while not self.should_exit:
                 try:

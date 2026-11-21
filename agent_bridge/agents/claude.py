@@ -121,3 +121,6 @@ class ClaudeAdapter(Adapter):
 
     async def list_models(self, refresh: bool = False):
         return list(MODELS)
+
+    def cached_models(self):
+        return list(MODELS), True

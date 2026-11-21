@@ -112,16 +112,29 @@ def test_completer_lists_commands_and_args(monkeypatch):
     from prompt_toolkit.document import Document
 
     class Stub:
-        model_cache = {"agy": [("gemini-x", "Gemini X")]}
+        model_cache = {"agy": [("gemini-4-argon-high", "Gemini 4 Argon (High)"),
+                               ("gemini-4-neon-low", "Gemini 4 Neon (Low)")]}
+        settings = Settings(agy_model="gemini-4-neon-low")
+        fetched = []
 
-    comp = commands.SlashCompleter(Stub())
+        def prefetch_models(self, agent=None):
+            self.fetched.append(agent)
+
+    stub = Stub()
+    comp = commands.SlashCompleter(stub)
 
     def names(text):
         return [c.text for c in comp.get_completions(Document(text), None)]
 
     assert "/model" in names("/mo") and "/mode" in names("/mo")
     assert names("/model ") == ["claude", "agy"]
-    assert "gemini-x" in names("/model agy ")
+    assert names("/model agy ") == ["agy default", "agy gemini-4-argon-high", "agy gemini-4-neon-low"]
+    assert names("/model agy argon") == ["agy gemini-4-argon-high"]
+    shown = {c.text: (c.display_text, c.display_meta_text) for c in comp.get_completions(Document("/model agy "), None)}
+    assert shown["agy gemini-4-neon-low"][0] == "Gemini 4 Neon (Low)  ✓"
+    assert names("/model claude ")[0].startswith("claude ")  # not loaded yet → loading hint + prefetch
+    assert stub.fetched == ["claude"]
+
     assert names("/perms a") == ["auto"]
     assert names("hello") == []
 
@@ -238,3 +251,20 @@ def test_resume_by_search_words(monkeypatch):
 
     app = run_script(monkeypatch, script)
     assert "pizza" in app.engine.state["topic"].lower()
+
+
+def test_agy_models_cache_is_instant_and_refreshes(monkeypatch, tmp_path):
+    import json, time
+    from agent_bridge import config
+    from agent_bridge.agents.agy import AgyAdapter
+    cache = config.cache_dir() / "agy_models.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"at": time.time() - 9 * 86400, "models": [["old-model", "Old Model"]]}))
+    ad = AgyAdapter()
+    assert ad.cached_models() == ([("old-model", "Old Model")], False)  # stale but usable instantly
+    script = tmp_path / "agy"
+    script.write_text("#!/bin/sh\nprintf 'new-model\\tNew Model\\n'\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    assert asyncio.run(ad.list_models()) == [("new-model", "New Model")]
+    assert ad.cached_models() == ([("new-model", "New Model")], True)

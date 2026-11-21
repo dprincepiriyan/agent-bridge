@@ -139,16 +139,28 @@ async def cmd_help(app: "App", args: list[str]) -> None:
                            "message, Esc or Ctrl+C to interrupt.", style="dim"))
 
 
-def _model_args(app: "App", done: list[str]):
-    if not done:
-        return list(AGENTS)
-    agent = _agent_arg(done[0])
-    if len(done) == 1 and agent:
-        return ["default"] + [m for m, _ in app.model_cache.get(agent, [])]
-    return []
+def _model_args(app: "App", rest: str):
+    """Completions for '/model <agent> <search words>' as (inserted text, shown name, detail)."""
+    first, sep, query = rest.partition(" ")
+    if not sep:
+        return [(a, a, NAMES[a]) for a in AGENTS if a.startswith(first.lower())]
+    agent = _agent_arg(first)
+    if not agent:
+        return []
+    if agent not in app.model_cache:
+        app.prefetch_models(agent)  # fills instantly from the on-disk cache when there is one
+    models = app.model_cache.get(agent)
+    if models is None:
+        return [(f"{first} ", "loading models…", "they'll appear in a moment — keep typing or press Tab")]
+    q = query.strip()
+    out = [(f"{first} default", "default", "the CLI's own default")] if "default".startswith(q.lower()) else []
+    current = getattr(app.settings, f"{agent}_model", "")
+    for mid, label in (match_models(q, models) if q else models):
+        out.append((f"{first} {mid}", label + ("  ✓" if mid == current else ""), mid))
+    return out
 
 
-@command("model", "Change the model for Claude or Antigravity", "[agent] [model]", args=_model_args)
+@command("model", "Change the model for Claude or Antigravity", "[agent] [model]", args=_model_args, search=True)
 async def cmd_model(app: "App", args: list[str]) -> None:
     agent = _agent_arg(args[0]) if args else await _choose_agent(app, "Change the model for which agent?")
     if not agent:

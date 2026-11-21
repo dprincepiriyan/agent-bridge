@@ -1,3 +1,3 @@
 """agent-bridge: let Claude Code and Antigravity talk to each other."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"

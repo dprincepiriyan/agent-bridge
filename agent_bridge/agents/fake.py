@@ -46,3 +46,6 @@ class FakeAdapter(Adapter):
 
     async def list_models(self, refresh: bool = False):
         return [(f"{self.name}-fast", "Fake fast"), (f"{self.name}-smart", "Fake smart")]
+
+    def cached_models(self):
+        return [(f"{self.name}-fast", "Fake fast"), (f"{self.name}-smart", "Fake smart")], True

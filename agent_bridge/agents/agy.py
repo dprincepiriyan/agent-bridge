@@ -87,28 +87,38 @@ class AgyAdapter(Adapter):
         return TurnResult(text=(result.get("response") or "").strip(),
                           meta=f"{tokens} tok" if tokens else "", tokens=tokens)
 
+    def _cache_file(self):
+        return config.cache_dir() / "agy_models.json"
+
+    def cached_models(self):
+        """Whatever is on disk, even if old (shown instantly; refreshed in the background)."""
+        try:
+            data = json.loads(self._cache_file().read_text())
+            models = [tuple(m) for m in data["models"]]
+            return models, time.time() - data["at"] < CACHE_TTL
+        except (OSError, ValueError, KeyError, TypeError):
+            return [], False
+
     async def list_models(self, refresh: bool = False):
-        cache = config.cache_dir() / "agy_models.json"
-        if not refresh and cache.exists():
-            try:
-                data = json.loads(cache.read_text())
-                if time.time() - data["at"] < CACHE_TTL and data["models"]:
-                    return [tuple(m) for m in data["models"]]
-            except (OSError, ValueError, KeyError):
-                pass
+        if not refresh:
+            models, fresh = self.cached_models()
+            if models and fresh:
+                return models
         try:
             proc = await asyncio.create_subprocess_exec(
                 "agy", "models", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(proc.communicate(), 60)
         except (FileNotFoundError, TimeoutError):
-            return []
+            return self.cached_models()[0]
         models = []
         for line in out.decode(errors="replace").splitlines():
             if "\t" in line:
                 mid, label = line.split("\t", 1)
                 models.append((mid.strip(), label.strip()))
         if models:
+            cache = self._cache_file()
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({"at": time.time(), "models": models}))
-        return models
+            return models
+        return self.cached_models()[0]

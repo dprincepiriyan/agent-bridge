@@ -85,6 +85,10 @@ class Adapter:
         """[(model_id, label)], without the 'default' entry."""
         return []
 
+    def cached_models(self) -> tuple[list[tuple[str, str]], bool]:
+        """(models available instantly, whether they're fresh). Slow CLIs override this."""
+        return [], False
+
 
 def _kill(proc: asyncio.subprocess.Process, sig: int) -> None:
     try:
