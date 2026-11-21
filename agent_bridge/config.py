@@ -43,7 +43,8 @@ class Settings:
     turns: int = 8
     perms: str = "none"
     workdir: str = ""         # "" = isolated per-run workspace
-    timeout: int = 600
+    timeout: int = 3600       # hard cap per agent call
+    idle_timeout: int = 600   # stop an agent that produces no output for this long
     retries: int = 2
     max_words: int = 350
     stop_token: str = STOP_DEFAULT
@@ -51,6 +52,11 @@ class Settings:
     claude_effort: str = ""
     agy_model: str = ""
     agy_effort: str = ""
+    verify: str = ""          # shell command that must pass before a run counts as done
+    verify_timeout: int = 900
+    checkpoints: bool = True  # git-commit the workdir after every turn
+    judge: str = "claude"     # who writes /summary verdicts
+    auto_verdict: bool = True  # write a verdict automatically when a debate ends
 
     def validate(self) -> list[str]:
         """Fix invalid values in place; return warnings."""
@@ -65,12 +71,14 @@ class Settings:
             reset("preset", "is not a known mode")
         if self.first not in AGENTS:
             reset("first", "must be claude or agy")
+        if self.judge not in AGENTS:
+            reset("judge", "must be claude or agy")
         if self.perms not in PERMS:
             reset("perms", "is not a permission level")
         for a in AGENTS:
             if getattr(self, f"{a}_effort") not in ("",) + EFFORTS:
                 reset(f"{a}_effort", "is not an effort level")
-        for name in ("turns", "timeout", "max_words"):
+        for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout"):
             if not isinstance(getattr(self, name), int) or getattr(self, name) < 1:
                 reset(name, "must be a positive integer")
         if not isinstance(self.retries, int) or self.retries < 0:
@@ -95,8 +103,8 @@ def load() -> tuple[Settings, list[str]]:
         if k not in types:
             warn.append(f"config: unknown key {k!r} ignored")
             continue
-        expected = int if types[k] in ("int", int) else str
-        if not isinstance(v, expected) or isinstance(v, bool):
+        expected = {"int": int, "bool": bool}.get(str(types[k]), str)
+        if not isinstance(v, expected) or (expected is int and isinstance(v, bool)):
             warn.append(f"config: {k} should be {expected.__name__}; ignored")
             continue
         setattr(s, k, v)
@@ -107,7 +115,13 @@ def load() -> tuple[Settings, list[str]]:
 def dumps(s: Settings) -> str:
     lines = ["# agent-bridge defaults. Edit freely or use /config save.", ""]
     for k, v in asdict(s).items():
-        lines.append(f"{k} = {v if isinstance(v, int) else json.dumps(v, ensure_ascii=False)}")
+        if isinstance(v, bool):
+            val = "true" if v else "false"
+        elif isinstance(v, int):
+            val = str(v)
+        else:
+            val = json.dumps(v, ensure_ascii=False)
+        lines.append(f"{k} = {val}")
     return "\n".join(lines) + "\n"
 
 

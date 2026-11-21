@@ -164,7 +164,8 @@ def test_v1_state_upgrade(tmp_path):
                      "agy": {"role": "b", "started": True, "session": "s2"}}}
     (d / "state.json").write_text(json.dumps(v1))
     st = store.load_state(d)
-    assert st["version"] == 2
+    assert st["version"] == store.SCHEMA
+    assert st["own_workspace"] is True and st["checkpoint_log"] == []
     assert st["agents"]["claude"]["model"] == "sonnet"
     assert st["agents"]["agy"]["model"] == ""
     assert st["pending_user"] == []

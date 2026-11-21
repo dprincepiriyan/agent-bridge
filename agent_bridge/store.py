@@ -40,8 +40,17 @@ def transcript_path(state: dict) -> Path:
     return Path(state["run_dir"]) / "transcript.md"
 
 
+SCHEMA = 3
+
+V3_DEFAULTS = {
+    "pending_notes": [], "idle_timeout": 600, "verify": "", "verify_timeout": 900, "checkpoints": True,
+    "checkpoint_ok": None, "checkpoint_log": [], "own_workspace": False, "judge": "claude",
+    "auto_verdict": True, "last_verify": None,
+}
+
+
 def upgrade(state: dict) -> dict:
-    """Bring a v0.1 state.json up to the current schema."""
+    """Bring an older state.json up to the current schema."""
     if state.get("version", 1) < 2:
         for a in AGENTS:
             ag = state["agents"][a]
@@ -52,6 +61,13 @@ def upgrade(state: dict) -> dict:
         state.setdefault("pending_user", [])
         state.setdefault("last_speaker", None)
         state["version"] = 2
+    for k, v in V3_DEFAULTS.items():  # always: fills fields for new and old states alike
+        state.setdefault(k, list(v) if isinstance(v, list) else v)
+    if state["version"] < SCHEMA:
+        # v0.1/0.2 per-run workspaces live inside the run dir
+        state["own_workspace"] = state["own_workspace"] or str(state.get("workdir", "")).startswith(
+            str(state.get("run_dir", "\0")))
+        state["version"] = SCHEMA
     return state
 
 

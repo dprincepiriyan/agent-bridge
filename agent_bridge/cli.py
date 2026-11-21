@@ -21,7 +21,7 @@ perms:  none (talk only) · edits (auto-accept file edits) · auto (edits + comm
 examples:
   agent-bridge
   agent-bridge "Should a 3-person startup use microservices?" -P debate
-  agent-bridge "$(cat SPEC.md)" -P build-review --perms auto --workdir ~/projects/app -n 20
+  agent-bridge "$(cat SPEC.md)" -P build-review --perms auto --workdir ~/projects/app -n 20 --verify "pytest -q"
   agent-bridge --resume ~/.local/share/agent-bridge/runs/20261121-120000 -n 12
 """
 
@@ -37,7 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-n", "--turns", type=int, help="max total turns")
     ap.add_argument("--perms", choices=PERMS)
     ap.add_argument("--workdir", help="shared working dir (default: isolated per-run workspace)")
-    ap.add_argument("--timeout", type=int, help="seconds per agent call")
+    ap.add_argument("--timeout", type=int, help="hard cap in seconds per agent call (default 3600)")
+    ap.add_argument("--idle-timeout", type=int, help="stop an agent after this many seconds without output (default 600)")
+    ap.add_argument("--verify", metavar="CMD", help='command that must pass before "done" counts, e.g. "pytest -q"')
+    ap.add_argument("--verify-timeout", type=int, help="seconds for the verify command (default 900)")
+    ap.add_argument("--no-checkpoints", dest="checkpoints", action="store_false", default=None,
+                    help="don't git-commit the workdir after each turn")
+    ap.add_argument("--judge", choices=AGENTS, help="who writes the debate verdict (default claude)")
+    ap.add_argument("--no-verdict", dest="auto_verdict", action="store_false", default=None,
+                    help="skip the automatic verdict when a debate ends")
     ap.add_argument("--retries", type=int)
     ap.add_argument("--max-words", type=int)
     ap.add_argument("--stop-token")
@@ -51,7 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def apply_args(s: config.Settings, args: argparse.Namespace) -> None:
     for key in ("preset", "role_a", "role_b", "first", "turns", "perms", "workdir", "timeout", "retries",
-                "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort"):
+                "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort",
+                "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict"):
         v = getattr(args, key, None)
         if v is not None:
             setattr(s, key, v)
@@ -90,8 +99,10 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
             for k in ("model", "effort"):
                 if (v := getattr(args, f"{a}_{k}")) is not None:
                     st["agents"][a][k] = v
-        if args.perms:
-            st["perms"] = args.perms
+        for key in ("perms", "verify", "verify_timeout", "idle_timeout", "timeout", "judge",
+                    "checkpoints", "auto_verdict"):
+            if (v := getattr(args, key, None)) is not None:
+                st[key] = v
     else:
         if s.workdir and s.perms != "none":
             console.print(f"[yellow]⚠ agents may modify files in {s.workdir}[/]")
@@ -109,10 +120,10 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
     console.print(f"[dim]Transcript: {tilde(engine.run_dir / 'transcript.md')}"
                   + (f"  ·  Claude ~${cost:.3f} API-equivalent (covered by a subscription)" if cost else "") + "[/]",
                   soft_wrap=True)
-    if reason in ("limit", "paused", "error"):
+    if reason in ("limit", "paused", "error", "verify_failed", "usage_limit"):
         console.print(f"[dim]Continue with: agent-bridge --resume {tilde(engine.run_dir)} -n {engine.state['turn'] + 4}[/]",
                       soft_wrap=True)
-    return 1 if reason == "error" else 0
+    return {"error": 1, "verify_failed": 1, "usage_limit": 3}.get(reason, 0)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -6,7 +6,8 @@ import json
 import time
 
 from .. import config
-from .base import Adapter, AgentError, TurnContext, TurnResult, stream_process
+from .base import (Adapter, AgentError, TurnContext, TurnResult, UsageLimitError, looks_like_limit,
+                   parse_reset, stream_process)
 
 PERM_FLAGS = {
     "none": ["--mode", "plan"],
@@ -14,6 +15,7 @@ PERM_FLAGS = {
     "auto": ["--mode", "auto"],
 }
 CACHE_TTL = 24 * 3600
+QUIET_STEPS = {"user_input", "system_message", "ephemeral_message", "checkpoint", "planner_response"}
 
 
 class AgyAdapter(Adapter):
@@ -23,7 +25,7 @@ class AgyAdapter(Adapter):
 
     def build_cmd(self, agent: dict, prompt: str, ctx: TurnContext) -> list[str]:
         cmd = ["agy", "--output-format", "stream-json"] + PERM_FLAGS[ctx.perms]
-        if agent.get("started") and agent.get("session"):
+        if agent.get("started") and agent.get("session") and not ctx.ephemeral:
             cmd += ["--conversation", agent["session"]]
         if agent.get("model"):
             cmd += ["--model", agent["model"]]
@@ -56,16 +58,23 @@ class AgyAdapter(Adapter):
                             on_text("\n\n")
                         last_text_step = idx
                         on_text(st["text_delta"])
-                elif kind and kind != "user_input" and idx not in seen_steps:
+                elif kind and kind not in QUIET_STEPS and idx not in seen_steps:
                     seen_steps.add(idx)
                     on_tool(kind)
             elif ev == "result":
                 result = d.get("result") or {}
 
-        code, err = await stream_process(self.build_cmd(agent, prompt, ctx), ctx.workdir, ctx.timeout, on_line)
+        code, err = await stream_process(self.build_cmd(agent, prompt, ctx), ctx.workdir, ctx.timeout,
+                                         on_line, ctx.idle_timeout)
         if result is None or result.get("status") != "SUCCESS":
             detail = (json.dumps(result)[:800] if result else "") or err[-1500:] or "\n".join(junk[-5:])
+            if looks_like_limit(detail):
+                raise UsageLimitError(f"Antigravity quota/limit reached: {detail[:300]}", parse_reset(detail))
             raise AgentError(f"agy failed (exit {code}): {detail}")
+        if ctx.ephemeral:
+            tokens = (result.get("usage") or {}).get("total_tokens")
+            return TurnResult(text=(result.get("response") or "").strip(), meta=f"{tokens} tok" if tokens else "",
+                              tokens=tokens)
         if not result.get("conversation_id"):
             raise AgentError("agy returned no conversation_id; cannot keep context")
         agent["session"] = result["conversation_id"]

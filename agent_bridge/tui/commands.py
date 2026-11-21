@@ -492,6 +492,13 @@ async def cmd_status(app: "App", args: list[str]) -> None:
     t.add_row("Turns", str(s.turns))
     t.add_row("Perms", f"{s.perms} — {PERMS[s.perms]}")
     t.add_row("Workdir", s.workdir or "isolated per-run workspace")
+    t.add_row("Verify", s.verify or "(none)")
+    t.add_row("Checkpoints", "on" if s.checkpoints else "off")
+    t.add_row("Judge", f"{NAMES[s.judge]} · auto verdict {'on' if s.auto_verdict else 'off'}")
+    t.add_row("Timeouts", f"{s.idle_timeout}s without output · {s.timeout}s per call")
+    lim = app.adapters["claude"].limits
+    if lim and lim.get("five_hour") is not None:
+        t.add_row("Claude usage", f"5-hour window {lim['five_hour']:.0%} · 7-day {lim.get('seven_day') or 0:.0%}")
     if app.engine:
         st = app.engine.state
         t.add_row("", "")
@@ -502,6 +509,13 @@ async def cmd_status(app: "App", args: list[str]) -> None:
         for a in AGENTS:
             ag = st["agents"][a]
             t.add_row(f"  {NAMES[a]}", f"session {ag.get('session') or '—'} · tokens {ag.get('tokens', 0):,}")
+        if st.get("last_verify"):
+            lv = st["last_verify"]
+            t.add_row("  Last verify", f"{'passed' if lv['ok'] else 'failed (exit ' + str(lv['code']) + ')'} "
+                                       f"at turn {lv['turn']}")
+        n_cp = len(st.get("checkpoint_log", []))
+        if n_cp:
+            t.add_row("  Checkpoints", f"{n_cp} commit(s) · /checkpoints to list · /undo to revert")
         if app.engine.cost:
             t.add_row("  Claude cost", f"~${app.engine.cost:.3f} API-equivalent (covered by a subscription)")
     app.console.print(t)
@@ -525,6 +539,125 @@ async def cmd_config(app: "App", args: list[str]) -> None:
         app.console.print(Text(config.dumps(app.settings)))
     else:
         app.warn("Usage: /config [show|save|reset]")
+
+
+# ------------------------------------------------- verify / checkpoints / verdict
+@command("verify", "Command that must pass before 'done' counts (e.g. pytest -q)", "[cmd|off|run]",
+         args=lambda app, done: ["off", "run", "pytest -q", "npm test", "cargo test", "go test ./..."] if not done else [])
+async def cmd_verify(app: "App", args: list[str]) -> None:
+    raw = " ".join(args).strip()
+    current = app.engine.state.get("verify") if app.engine else app.settings.verify
+    if not raw:
+        app.info(f"Verify command: {current or '(none)'}\n  /verify <cmd> to set · /verify off · /verify run to run it now")
+        return
+    if raw == "run":
+        if not app.engine:
+            app.warn("No conversation yet — the command runs in the conversation's workdir.")
+            return
+        if not current:
+            app.warn("No verify command set. Example: /verify pytest -q")
+            return
+        if not _need_idle(app, "run verification"):
+            return
+        app.start_task(app.engine.verify_now())
+        return
+    value = "" if raw in ("off", "none") else raw
+    app.settings.verify = value
+    if app.engine:
+        app.engine.set(verify=value)
+    app.info(f"Verify → {value or 'off'}" + (" (applies to this conversation too)" if app.engine else ""))
+
+
+@command("checkpoints", "Git-commit the workdir after every turn", "[on|off]",
+         args=lambda app, done: ["on", "off"] if not done else [])
+async def cmd_checkpoints(app: "App", args: list[str]) -> None:
+    if not args:
+        on = app.engine.state.get("checkpoints") if app.engine else app.settings.checkpoints
+        msg = f"Checkpoints: {'on' if on else 'off'}"
+        if app.engine:
+            log = app.engine.state.get("checkpoint_log", [])
+            ok = app.engine.state.get("checkpoint_ok")
+            if on and ok is False:
+                msg += " (inactive: workdir isn't a clean git repo)"
+            for e in log[-8:]:
+                who = NAMES.get(e.get("agent") or "", "—")
+                msg += (f"\n  turn {e['turn']:>3} · {who:<11} {e['sha']}  {e.get('stat', '')}"
+                        f"{'  (reverted)' if e.get('reverted') else ''}")
+        app.info(msg)
+        return
+    val = args[0].lower()
+    if val not in ("on", "off"):
+        app.warn("Usage: /checkpoints [on|off]")
+        return
+    on = val == "on"
+    app.settings.checkpoints = on
+    if app.engine:
+        app.engine.set(checkpoints=on, checkpoint_ok=None)  # re-checked at the next run start
+    app.info(f"Checkpoints → {val}")
+
+
+@command("undo", "Revert the file changes of the last turn (or a given turn)", "[turn]")
+async def cmd_undo(app: "App", args: list[str]) -> None:
+    if not app.engine:
+        app.warn("No conversation.")
+        return
+    if not _need_idle(app, "undo"):
+        return
+    turn = None
+    if args:
+        try:
+            turn = int(args[0])
+        except ValueError:
+            app.warn("Usage: /undo [turn]")
+            return
+    live = [e for e in app.engine.state.get("checkpoint_log", []) if not e.get("reverted")]
+    if turn is not None:
+        live = [e for e in live if e["turn"] == turn]
+    if not live:
+        app.warn("Nothing to undo — no checkpoints" + (f" for turn {turn}." if turn else " yet."))
+        return
+    e = live[-1]
+    who = NAMES.get(e.get("agent") or "", "—")
+    if not await confirm(f"Revert turn {e['turn']} ({who}, {e['sha']}: {e.get('stat') or 'changes'})? "
+                         "This adds a revert commit."):
+        return
+    ok, msg = await app.engine.undo(e["turn"])
+    (app.info if ok else app.warn)(msg + (" The agents will be told on their next turn." if ok else ""))
+
+
+@command("summary", "Write a verdict (debates) or summary of this conversation", "[claude|agy]",
+         aliases=("verdict",), args=lambda app, done: list(AGENTS) if not done else [])
+async def cmd_summary(app: "App", args: list[str]) -> None:
+    if not app.engine or not app.engine.state["turn"]:
+        app.warn("Nothing to summarize yet.")
+        return
+    if not _need_idle(app, "summarize"):
+        return
+    judge = _agent_arg(args[0]) if args else app.settings.judge
+    if not judge:
+        app.warn("Usage: /summary [claude|agy]")
+        return
+    app.start_task(app.engine.summarize(judge))
+
+
+@command("judge", "Who writes verdicts, and whether debates get one automatically", "[claude|agy|auto on|auto off]",
+         args=lambda app, done: ["claude", "agy", "auto"] if not done else (["on", "off"] if done == ["auto"] else []))
+async def cmd_judge(app: "App", args: list[str]) -> None:
+    if args and args[0] == "auto":
+        on = len(args) > 1 and args[1] == "on"
+        app.settings.auto_verdict = on
+        if app.engine:
+            app.engine.set(auto_verdict=on)
+        app.info(f"Automatic debate verdict → {'on' if on else 'off'}")
+        return
+    agent = _agent_arg(args[0]) if args else await pick(
+        "Who should judge?", [(a, NAMES[a], "") for a in AGENTS], app.settings.judge)
+    if not agent:
+        return
+    app.settings.judge = agent
+    if app.engine:
+        app.engine.set(judge=agent)
+    app.info(f"Judge → {NAMES[agent]} (automatic debate verdict: {'on' if app.settings.auto_verdict else 'off'})")
 
 
 @command("clear", "Clear the screen")

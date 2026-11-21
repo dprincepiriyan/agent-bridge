@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,12 +14,37 @@ class AgentError(RuntimeError):
     pass
 
 
+class UsageLimitError(AgentError):
+    """The agent's subscription/quota limit was hit. Retrying won't help."""
+
+    def __init__(self, msg: str, resets_at: float | None = None):
+        super().__init__(msg)
+        self.resets_at = resets_at
+
+
+_LIMIT_RE = re.compile(
+    r"(usage|rate)[ _-]?limit|limit (reached|exceeded)|hit your limit|out of (credits|quota)|quota"
+    r"|resource[_ ]exhausted|too many requests|\b429\b", re.I)
+
+
+def looks_like_limit(text: str) -> bool:
+    return bool(text and _LIMIT_RE.search(text))
+
+
+def parse_reset(text: str) -> float | None:
+    """Find a unix-epoch reset time like 'limit reached|1795293600'."""
+    m = re.search(r"\b(1[7-9]\d{8})\b", text or "")
+    return float(m.group(1)) if m else None
+
+
 @dataclass
 class TurnContext:
     workdir: Path
     perms: str
-    timeout: int
+    timeout: int                 # hard cap for the whole call
     system_prompt: str
+    idle_timeout: int = 600      # kill if no output at all for this long
+    ephemeral: bool = False      # one-off call (judge): don't create/resume a session
 
 
 @dataclass
@@ -36,6 +62,7 @@ class Adapter:
     name = ""
     label = ""
     executable = ""
+    limits: dict | None = None  # latest usage info the CLI reported, if any
 
     async def send(self, agent: dict, prompt: str, ctx: TurnContext,
                    on_text: TextCb, on_tool: TextCb) -> TurnResult:
@@ -53,10 +80,10 @@ def _kill(proc: asyncio.subprocess.Process, sig: int) -> None:
         pass
 
 
-async def stream_process(cmd: list[str], cwd: Path, timeout: int,
-                         on_line: Callable[[str], None]) -> tuple[int, str]:
+async def stream_process(cmd: list[str], cwd: Path, timeout: int, on_line: Callable[[str], None],
+                         idle_timeout: int | None = None) -> tuple[int, str]:
     """Run cmd, feeding each stdout line to on_line. Kills the whole process group
-    on timeout or cancellation. Returns (returncode, stderr)."""
+    on timeout, prolonged silence, or cancellation. Returns (returncode, stderr)."""
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)  # nested `claude` should act as a fresh top-level run
     try:
@@ -69,7 +96,14 @@ async def stream_process(cmd: list[str], cwd: Path, timeout: int,
     err_task = asyncio.create_task(proc.stderr.read())
     try:
         async with asyncio.timeout(timeout):
-            async for raw in proc.stdout:
+            while True:
+                try:
+                    raw = (await asyncio.wait_for(proc.stdout.readline(), idle_timeout) if idle_timeout
+                           else await proc.stdout.readline())
+                except TimeoutError:
+                    raise AgentError(f"no output for {idle_timeout}s — the agent looks stuck")
+                if not raw:
+                    break
                 line = raw.decode(errors="replace").strip()
                 if line:
                     on_line(line)

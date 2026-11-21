@@ -96,3 +96,11 @@ All six phases were implemented in v0.2.0:
 - [x] 6. `install.sh` (uv or private venv), v0.1 run migration, README, 29 offline tests.
 
 Deviation: `install.sh` falls back to a private virtual environment when `uv` isn't installed, so `uv` is optional.
+
+## v0.3.0
+
+- [x] Verification command that must pass before "done" counts (`/verify`, `--verify`).
+- [x] Git checkpoint after every turn, plus `/undo` (revert commit, agents notified). Off for dirty user repos.
+- [x] Idle timeout (no output) separate from the total timeout.
+- [x] Usage-limit detection: pause immediately with the reset time; Claude 5-hour usage in the status bar.
+- [x] Debate verdicts written by a fresh judge call; `/summary` for any conversation.

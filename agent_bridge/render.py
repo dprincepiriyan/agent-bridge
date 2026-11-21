@@ -11,7 +11,7 @@ from .engine import Event
 from .presets import NAMES
 
 COLORS = {"claude": "#e08a63", "agy": "#7fb2ff"}
-TOOL_LABELS = {"run_command": "running a command"}
+TOOL_LABELS = {"run_command": "running a command", "tool": "using a tool"}
 
 
 def tilde(path) -> str:
@@ -47,6 +47,25 @@ def md_line(line: str, in_code: bool) -> tuple[Text, bool]:
         else:
             t.append(part)
     return t, False
+
+
+def fmt_reset(ts) -> str:
+    if not ts:
+        return ""
+    import datetime as dt
+    try:
+        t = dt.datetime.fromtimestamp(float(ts))
+    except (ValueError, OverflowError, OSError):
+        return ""
+    now = dt.datetime.now()
+    return t.strftime("%H:%M" if t.date() == now.date() else "%a %d %b %H:%M")
+
+
+def usage_limit_msg(data: dict) -> str:
+    who = NAMES.get(data.get("agent") or "", "An agent")
+    when = fmt_reset(data.get("resets_at"))
+    return (f"⏸ {who} hit its usage limit{f' (resets at {when})' if when else ''}. "
+            f"Progress saved — /continue once it resets.")
 
 
 class Renderer:
@@ -100,6 +119,33 @@ class Renderer:
         elif k == "notice":
             self._flush()
             self.c.print(Text(f"  {ev.text}", style="yellow"))
+        elif k == "checkpoint":
+            self._flush()
+            stat = ev.data.get("stat") or ""
+            self.c.print(Text(f"  ⎇ checkpoint {ev.text}" + (f" · {stat}" if stat else ""), style="dim"))
+        elif k == "verify_start":
+            self._flush()
+            self.c.print()
+            self.c.print(Text.assemble(("  ▶ verifying: ", "bold"), (ev.text, "")))
+        elif k == "verify_end":
+            ok = ev.data.get("ok")
+            out = ev.text.strip().splitlines()
+            if not ok and out:
+                for line in out[-15:]:
+                    self.c.print(Text(f"    {line}", style="dim"))
+            self.c.print(Text("  ✔ verification passed" if ok else
+                              f"  ✗ verification failed (exit {ev.data.get('code')}) — sending the output "
+                              f"back to the agents", style="bold green" if ok else "bold red"))
+        elif k == "summary_start":
+            self._flush()
+            self.in_code = False
+            self.c.print()
+            self.c.rule(Text(f"⚖ {ev.text} · by {NAMES[ev.agent]}", style="bold #c792ea"), align="left",
+                        style="#c792ea")
+        elif k == "summary_end":
+            self._flush()
+            meta = ev.data.get("meta") or ""
+            self.c.print(Text(f"  [saved to summary.md{' · ' + meta if meta else ''}]", style="dim"))
         elif k == "error":
             self._flush()
             self.c.print(Text(f"\n✗ {ev.text}", style="bold red"))
@@ -112,6 +158,9 @@ class Renderer:
                 "paused": ("‖ Paused.", "yellow"),
                 "interrupted": ("■ Interrupted. Progress saved.", "yellow"),
                 "error": ("✗ Stopped after repeated failures. Progress saved.", "red"),
+                "verify_failed": ("✗ Agents said done, but verification failed and no turns are left. "
+                                  "Progress saved.", "red"),
+                "usage_limit": (usage_limit_msg(ev.data), "bold yellow"),
             }[r]
             self.c.print()
             self.c.print(Text(msg, style=style))

@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import uuid
 
-from .base import Adapter, AgentError, TurnContext, TurnResult, stream_process
+from .base import (Adapter, AgentError, TurnContext, TurnResult, UsageLimitError, looks_like_limit,
+                   parse_reset, stream_process)
 
 MODELS = [
     ("opus", "Opus (latest)"),
@@ -25,9 +26,14 @@ class ClaudeAdapter(Adapter):
     label = "Claude"
     executable = "claude"
 
+    def __init__(self):
+        self.limits = None
+
     def build_cmd(self, agent: dict, prompt: str, ctx: TurnContext) -> list[str]:
         cmd = ["claude", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
-        if agent.get("started"):
+        if ctx.ephemeral:
+            cmd += ["--no-session-persistence"]
+        elif agent.get("started"):
             cmd += ["--resume", agent["session"]]
         else:
             cmd += ["--session-id", agent["session"]]
@@ -39,8 +45,17 @@ class ClaudeAdapter(Adapter):
             cmd += ["--effort", agent["effort"]]
         return cmd + ["-p", prompt]
 
+    def _note_limits(self, info: dict) -> None:
+        windows = info.get("unifiedWindows") or {}
+        self.limits = {
+            "status": info.get("status"),
+            "resets_at": info.get("resetsAt"),
+            "five_hour": (windows.get("five_hour") or {}).get("utilization"),
+            "seven_day": (windows.get("seven_day") or {}).get("utilization"),
+        }
+
     async def send(self, agent, prompt, ctx, on_text, on_tool) -> TurnResult:
-        if not agent.get("session"):
+        if not agent.get("session") and not ctx.ephemeral:
             agent["session"] = str(uuid.uuid4())
         result: dict | None = None
         had_text = False
@@ -68,21 +83,32 @@ class ClaudeAdapter(Adapter):
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         had_text = True
                         on_text(delta["text"])
+            elif t == "rate_limit_event":
+                self._note_limits(d.get("rate_limit_info") or {})
             elif t == "result":
                 result = d
 
-        try:
-            code, err = await stream_process(self.build_cmd(agent, prompt, ctx), ctx.workdir, ctx.timeout, on_line)
-        except AgentError:
-            if not agent.get("started"):
+        def rotate():
+            if not agent.get("started") and not ctx.ephemeral:
                 agent["session"] = str(uuid.uuid4())  # never reuse a half-created session ID
+
+        try:
+            code, err = await stream_process(self.build_cmd(agent, prompt, ctx), ctx.workdir, ctx.timeout,
+                                             on_line, ctx.idle_timeout)
+        except AgentError:
+            rotate()
             raise
         if result is None or result.get("is_error") or result.get("subtype", "success") != "success":
-            if not agent.get("started"):
-                agent["session"] = str(uuid.uuid4())
+            rotate()
             detail = (result or {}).get("result") or err[-1500:] or "\n".join(junk[-5:])
+            rejected = (self.limits or {}).get("status") == "rejected"
+            if rejected or looks_like_limit(str(detail)):
+                resets = (self.limits or {}).get("resets_at") if rejected else None
+                raise UsageLimitError(f"Claude usage limit reached: {str(detail)[:300]}",
+                                      resets or parse_reset(str(detail)))
             raise AgentError(f"claude failed (exit {code}): {detail}")
-        agent["started"] = True
+        if not ctx.ephemeral:
+            agent["started"] = True
         cost = result.get("total_cost_usd")
         usage = result.get("usage") or {}
         tokens = sum(usage.get(k, 0) or 0 for k in ("input_tokens", "output_tokens",

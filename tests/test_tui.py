@@ -134,3 +134,37 @@ def test_unknown_command_does_not_crash(monkeypatch):
 
     app = run_script(monkeypatch, script)
     assert app.settings.turns == 8
+
+
+def test_v03_commands(monkeypatch):
+    async def script(app, inp):
+        inp.send_text("/verify true\r")
+        await wait_for(lambda: app.settings.verify == "true")
+        inp.send_text("/judge agy\r")
+        await wait_for(lambda: app.settings.judge == "agy")
+        inp.send_text("/judge auto off\r")
+        await wait_for(lambda: app.settings.auto_verdict is False)
+        inp.send_text("/checkpoints off\r")
+        await wait_for(lambda: app.settings.checkpoints is False)
+        inp.send_text("/checkpoints on\r")
+        await wait_for(lambda: app.settings.checkpoints is True)
+        inp.send_text("/turns 2\r")
+        inp.send_text("/mode debate\r")
+        await wait_for(lambda: app.settings.preset == "debate")
+        inp.send_text("Cats or dogs?\r")
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running())
+        assert not (app.engine.run_dir / "summary.md").exists()  # auto verdict was turned off
+        inp.send_text("/verify run\r")
+        await wait_for(lambda: app.engine.state.get("last_verify") is not None)
+        await wait_for(lambda: not app.running())
+        inp.send_text("/summary\r")
+        await wait_for(lambda: (app.engine.run_dir / "summary.md").exists())
+        await wait_for(lambda: not app.running())
+        inp.send_text("/undo\r")  # nothing to undo in a talk-only debate → warning, no crash
+        inp.send_text("/status\r")
+        await asyncio.sleep(0.3)
+
+    app = run_script(monkeypatch, script)
+    assert app.engine.state["last_verify"]["ok"] is True
+    assert "(by Antigravity)" in (app.engine.run_dir / "summary.md").read_text()

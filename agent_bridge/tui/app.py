@@ -103,6 +103,12 @@ class App:
         parts = [("", " "), ("class:tb.claude", f"claude:{self._model_of('claude')}"), sep,
                  ("class:tb.agy", f"agy:{self._model_of('agy')}"), sep,
                  ("", self.settings.preset), sep, ("", f"perms:{self.engine.state['perms'] if self.engine else self.settings.perms}")]
+        verify = self.engine.state.get("verify") if self.engine else self.settings.verify
+        if verify:
+            parts += [sep, ("", "✓verify")]
+        lim = self.adapters["claude"].limits
+        if lim and lim.get("five_hour") is not None:
+            parts += [sep, ("class:tb.claude", f"5h {lim['five_hour']:.0%}")]
         if self.engine:
             st = self.engine.state
             parts += [sep, ("", f"turn {st['turn']}/{st['max_turns']}")]
@@ -113,7 +119,8 @@ class App:
             frame = SPINNER[int(time.monotonic() * 10) % len(SPINNER)]
             if cur:
                 agent, t0 = cur
-                busy = f"{frame} {NAMES[agent]} working {int(time.monotonic() - t0)}s"
+                who = "verifying" if agent == "verify" else f"{NAMES[agent]} working"
+                busy = f"{frame} {who} {int(time.monotonic() - t0)}s"
             else:
                 busy = f"{frame} working"
             parts += [sep, ("class:tb.busy", busy), ("class:tb.hint", "  esc stop · type to steer")]
@@ -134,6 +141,19 @@ class App:
         self.engine = Engine.new(s, topic, self.adapters, self.renderer)
         self.start_run()
 
+    def start_task(self, coro) -> None:
+        """Run a non-turn job (verify, summary) in the background so Esc can cancel it."""
+        self.task = asyncio.create_task(coro)
+        self.task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            self.warn("Cancelled.")
+        elif (exc := task.exception()) is not None:
+            self.console.print(Text("".join(traceback.format_exception(exc)), style="red"))
+        if (app := get_app_or_none()) is not None:
+            app.invalidate()
+
     def start_run(self) -> None:
         assert self.engine is not None
         self.engine.emit = self.renderer
@@ -151,7 +171,7 @@ class App:
             if reason == "agreed":
                 self.console.print(Text("Type a message to keep going in this conversation, or /new for a new topic.",
                                         style="dim"))
-            elif reason in ("limit", "paused", "error"):
+            elif reason in ("limit", "paused", "error", "verify_failed", "usage_limit"):
                 self.console.print(Text("Type a message to steer, /continue for more turns, or /new.", style="dim"))
         if self.engine:
             self.console.print(Text(f"Transcript: {tilde(self.engine.run_dir / 'transcript.md')}", style="dim"), soft_wrap=True)
@@ -182,6 +202,7 @@ class App:
             ("Antigravity", f"bold {COLORS['agy']}"), f": {s.agy_model or 'default'}\n",
             ("Mode", "bold"), f": {s.preset} · ", ("Turns", "bold"), f": {s.turns} · ",
             ("Perms", "bold"), f": {s.perms} · ", ("Dir", "bold"), f": {tilde(s.workdir) if s.workdir else 'per-run workspace'}",
+            *((("\n", ""), ("Verify", "bold"), (f": {s.verify}", "")) if s.verify else ()),
         )
         self.console.print(Panel(body, title=f"[bold]agent-bridge[/] v{__version__}", title_align="left",
                                  border_style="#5a5a5a", expand=False))
