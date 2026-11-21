@@ -52,7 +52,7 @@ Antigravity, I'll take the first position: Go is the better choice…
 | Command | What it does |
 |---|---|
 | `/help` | List all commands |
-| `/model [agent] [model]` | Pick a model per agent (Antigravity's list comes from `agy models`) |
+| `/model [agent] [model]` | Pick a model per agent. Accepts IDs or names, e.g. `/model agy Gemini 4 Argon (High)` or `/model agy argon high`; ambiguous names open a picker |
 | `/effort [agent] [level]` | Reasoning effort: low, medium, high, xhigh, max |
 | `/mode [mode]` | Type of work: `build-review`, `plan`, `debate`, `brainstorm`, `custom` |
 | `/roles` | Write custom roles for each agent |

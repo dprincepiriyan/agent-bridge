@@ -6,8 +6,8 @@ import json
 import time
 
 from .. import config
-from .base import (Adapter, AgentError, TurnContext, TurnResult, UsageLimitError, looks_like_limit,
-                   parse_reset, stream_process)
+from .base import (Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError,
+                   looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
 
 PERM_FLAGS = {
     "none": ["--mode", "plan"],
@@ -68,6 +68,10 @@ class AgyAdapter(Adapter):
                                          on_line, ctx.idle_timeout)
         if result is None or result.get("status") != "SUCCESS":
             detail = (json.dumps(result)[:800] if result else "") or err[-1500:] or "\n".join(junk[-5:])
+            if looks_like_bad_model(detail):
+                model = agent.get("model") or "default"
+                raise ConfigError(f"Antigravity doesn't recognise the model \"{model}\". "
+                                  f"Pick a valid one with /model agy (or --agy-model <id>).")
             if looks_like_limit(detail):
                 raise UsageLimitError(f"Antigravity quota/limit reached: {detail[:300]}", parse_reset(detail))
             raise AgentError(f"agy failed (exit {code}): {detail}")

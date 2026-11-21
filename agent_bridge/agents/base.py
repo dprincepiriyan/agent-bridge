@@ -14,6 +14,19 @@ class AgentError(RuntimeError):
     pass
 
 
+class ConfigError(AgentError):
+    """Bad settings (e.g. an unknown model). Retrying can't help; the user must change something."""
+
+
+_BAD_MODEL_RE = re.compile(
+    r"invalid model|model\b.{0,80}\b(not (recognized|found|available|supported)|does not exist|unknown)"
+    r"|issue with the selected model|unknown model", re.I | re.S)
+
+
+def looks_like_bad_model(text: str) -> bool:
+    return bool(text and _BAD_MODEL_RE.search(text))
+
+
 class UsageLimitError(AgentError):
     """The agent's subscription/quota limit was hit. Retrying won't help."""
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import uuid
 
-from .base import (Adapter, AgentError, TurnContext, TurnResult, UsageLimitError, looks_like_limit,
-                   parse_reset, stream_process)
+from .base import (Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError,
+                   looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
 
 MODELS = [
     ("opus", "Opus (latest)"),
@@ -101,6 +101,9 @@ class ClaudeAdapter(Adapter):
         if result is None or result.get("is_error") or result.get("subtype", "success") != "success":
             rotate()
             detail = (result or {}).get("result") or err[-1500:] or "\n".join(junk[-5:])
+            if looks_like_bad_model(str(detail)):
+                raise ConfigError(f"Claude doesn't recognise the model \"{agent.get('model') or 'default'}\" "
+                                  f"({str(detail)[:200]}). Pick a valid one with /model claude.")
             rejected = (self.limits or {}).get("status") == "rejected"
             if rejected or looks_like_limit(str(detail)):
                 resets = (self.limits or {}).get("resets_at") if rejected else None

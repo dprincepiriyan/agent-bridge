@@ -16,6 +16,7 @@ from rich.text import Text
 
 from .. import config, store
 from ..engine import Engine, resolve_roles
+from ..agents.models import match_models
 from ..presets import AGENTS, CUSTOM, EFFORTS, MODES, NAMES, PERMS, ROLE_PRESETS
 from .pickers import ask_text, confirm, pick
 
@@ -149,8 +150,29 @@ async def cmd_model(app: "App", args: list[str]) -> None:
             app.warn("Agent must be claude or agy.")
         return
     if len(args) >= 2:
-        value = "" if args[1] == "default" else args[1]
-        _apply_agent_setting(app, agent, "model", value)
+        query = " ".join(args[1:]).strip()  # model names can contain spaces
+        if query.lower() == "default":
+            _apply_agent_setting(app, agent, "model", "")
+            return
+        if agent not in app.model_cache:
+            app.info(f"Fetching {NAMES[agent]} models…")
+        models = await app.models(agent)
+        hits = match_models(query, models)
+        if len(hits) == 1:
+            _apply_agent_setting(app, agent, "model", hits[0][0])
+            return
+        if len(hits) > 1:
+            choice = await pick(f"{len(hits)} {NAMES[agent]} models match \"{query}\"",
+                                [(m, m, label) for m, label in hits])
+            if choice:
+                _apply_agent_setting(app, agent, "model", choice)
+            return
+        if agent == "claude" and " " not in query:
+            # claude accepts aliases and full IDs beyond our short list (e.g. claude-opus-5-5)
+            _apply_agent_setting(app, agent, "model", query)
+            return
+        app.warn(f"No {NAMES[agent]} model matches \"{query}\". Run /model {agent} to pick from the list"
+                 + (" (or choose \"custom…\" for an unlisted ID)." if agent == "agy" else "."))
         return
     while True:
         if agent not in app.model_cache:

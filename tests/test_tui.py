@@ -168,3 +168,22 @@ def test_v03_commands(monkeypatch):
     app = run_script(monkeypatch, script)
     assert app.engine.state["last_verify"]["ok"] is True
     assert "(by Antigravity)" in (app.engine.run_dir / "summary.md").read_text()
+
+
+def test_model_name_with_spaces(monkeypatch):
+    async def script(app, inp):
+        app.model_cache["agy"] = [("gemini-4-argon-high", "Gemini 4 Argon (High)"),
+                                  ("gemini-4-argon-low", "Gemini 4 Argon (Low)")]
+        inp.send_text("/model agy Gemini 4 Argon (High)\r")
+        await wait_for(lambda: app.settings.agy_model == "gemini-4-argon-high")
+        inp.send_text("/model agy Gemini 4 Argon\r")  # ambiguous → picker; pick #2
+        await asyncio.sleep(0.4)
+        inp.send_text("2")
+        await wait_for(lambda: app.settings.agy_model == "gemini-4-argon-low")
+        inp.send_text("/model agy Nonexistent Model\r")  # rejected, setting unchanged
+        await asyncio.sleep(0.3)
+        inp.send_text("/model claude claude-opus-5-5\r")  # claude accepts unlisted IDs
+        await wait_for(lambda: app.settings.claude_model == "claude-opus-5-5")
+
+    app = run_script(monkeypatch, script)
+    assert app.settings.agy_model == "gemini-4-argon-low"

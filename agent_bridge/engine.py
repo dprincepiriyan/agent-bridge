@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import store, workspace
-from .agents.base import Adapter, AgentError, TurnContext, TurnResult, UsageLimitError
+from .agents.base import Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError
 from .config import Settings
 from .presets import AGENTS, CUSTOM, NAMES, ROLE_PRESETS
 
@@ -258,6 +258,8 @@ class Engine:
             except UsageLimitError as e:
                 e.agent = me  # type: ignore[attr-defined]
                 raise  # retrying can't help
+            except ConfigError:
+                raise  # wrong settings: retrying can't help either
             except AgentError as e:
                 if attempt > s["retries"]:
                     raise

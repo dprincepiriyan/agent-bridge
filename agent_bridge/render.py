@@ -157,7 +157,7 @@ class Renderer:
                 "limit": (f"■ Reached the turn limit ({ev.data['max_turns']}).", "yellow"),
                 "paused": ("‖ Paused.", "yellow"),
                 "interrupted": ("■ Interrupted. Progress saved.", "yellow"),
-                "error": ("✗ Stopped after repeated failures. Progress saved.", "red"),
+                "error": ("✗ Stopped. Progress saved — fix the problem above, then /continue.", "red"),
                 "verify_failed": ("✗ Agents said done, but verification failed and no turns are left. "
                                   "Progress saved.", "red"),
                 "usage_limit": (usage_limit_msg(ev.data), "bold yellow"),
