@@ -113,3 +113,8 @@ Deviation: `install.sh` falls back to a private virtual environment when `uv` is
 - [x] Interrupted turns: re-sent prompt is marked so it isn't answered twice; Claude rotates a half-created
       session ID on cancel; mid-turn notes report their real recipient after Esc.
 - [x] Antigravity turns that end without a message get a nudge in the same conversation instead of a full retry.
+
+## v0.5.0
+
+- [x] `/publish`: create a GitHub repo (via `gh`, or a pasted URL over SSH) and push; private by default,
+      confirmation before every push, leftovers committed only with consent, never force-pushes.

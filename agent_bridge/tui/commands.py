@@ -394,6 +394,15 @@ async def cmd_init(app: "App", args: list[str]) -> None:
     await run_wizard(app)
 
 
+@command("publish", "Put the project on GitHub: create a repo (private by default) and push", "[folder]",
+         paths=True)
+async def cmd_publish(app: "App", args: list[str]) -> None:
+    if not _need_idle(app, "publish"):
+        return
+    from .publish import run_publish
+    await run_publish(app, " ".join(args).strip())
+
+
 @command("new", "Start a fresh conversation (next message is the topic)", aliases=("reset",))
 async def cmd_new(app: "App", args: list[str]) -> None:
     if not _need_idle(app, "start a new conversation"):

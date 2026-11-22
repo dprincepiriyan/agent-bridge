@@ -31,7 +31,7 @@ With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns 
 
 ```
 $ agent-bridge
-╭─ agent-bridge v0.4.0 ──────────────────────────────────────────────╮
+╭─ agent-bridge v0.5.0 ──────────────────────────────────────────────╮
 │ Claude: default   Antigravity: gemini-3.8-flash-low                │
 │ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
 ╰────────────────────────────────────────────────────────────────────╯
@@ -69,6 +69,7 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/summary [agent]` | Verdict (debates) or summary of the conversation, saved to `summary.md` |
 | `/judge [agent\|auto on\|auto off]` | Who judges, and whether debates get a verdict automatically |
 | `/pause` · `/stop` · `/continue [n]` | Pause after this turn · interrupt now · run more turns |
+| `/publish [folder]` | Put the project on GitHub: creates a repo (private by default) and pushes. Only when you run it; never force-pushes |
 | `/new` | Start a fresh conversation |
 | `/resume [words]` · `/runs` | Load a past conversation; the menu shows date, mode, progress and topic, and typing words filters by topic (`/resume pizza`) · list them all |
 | `/transcript [run]` | Open a transcript in your pager |
@@ -109,6 +110,20 @@ Command-line flags override your saved defaults.
 4. **Use `/perms auto`** if the agents need to run tests. With `edits` they can change files but can't run commands.
 5. **Give the reviewer teeth** with `/roles`, e.g. *"QA: run the tests, try to break it, list concrete bugs with file:line"*.
 6. **Steer as you go.** Type into the running conversation, and press Esc if they loop.
+
+## Publishing to GitHub
+
+The agents never push. They commit locally every turn, and you decide when the result goes to GitHub:
+
+```
+/diff all        # review everything they changed
+/publish         # create the GitHub repo (private by default) and push
+```
+
+- **Already has a remote:** `/publish` shows how many commits are new and pushes after you confirm.
+- **No remote, `gh` logged in:** asks for a name (default: the folder name) and visibility, then creates the repo and pushes. Log in once with `gh auth login`.
+- **No remote, `gh` not logged in:** create an empty repo at github.com/new and paste its URL. It's pushed over SSH.
+- Uncommitted leftovers are committed only if you agree. It never force-pushes: if GitHub has commits you don't (e.g. a README made on the website), it tells you to pull first.
 
 ## Where things are stored
 
