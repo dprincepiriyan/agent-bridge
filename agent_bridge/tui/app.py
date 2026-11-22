@@ -21,6 +21,7 @@ from ..agents import make_adapters, missing_executables
 from ..config import Settings
 from ..engine import Engine, Event
 from ..presets import AGENTS, NAMES
+from ..notify import Notifier
 from ..render import COLORS, Renderer, make_console, tilde
 from . import commands
 
@@ -47,6 +48,7 @@ class App:
         self.settings = settings
         self.console = make_console()
         self.renderer = Renderer(self.console)
+        self.notifier = Notifier(lambda: self.settings.notify, lambda: self.settings.notify_after)
         self.adapters = make_adapters()
         self.engine: Engine | None = None
         self.task: asyncio.Task | None = None
@@ -170,7 +172,7 @@ class App:
         s = self.settings
         if s.workdir and s.perms != "none":
             self.warn(f"⚠ agents may modify files in {s.workdir}")
-        self.engine = Engine.new(s, topic, self.adapters, self.renderer)
+        self.engine = Engine.new(s, topic, self.adapters, self.emit)
         self.start_run()
 
     def start_task(self, coro) -> None:
@@ -186,9 +188,13 @@ class App:
         if (app := get_app_or_none()) is not None:
             app.invalidate()
 
+    def emit(self, ev) -> None:
+        self.renderer(ev)
+        self.notifier(ev)
+
     def start_run(self) -> None:
         assert self.engine is not None
-        self.engine.emit = self.renderer
+        self.engine.emit = self.emit
         self.task = asyncio.create_task(self.engine.run())
         self.task.add_done_callback(self._on_done)
 

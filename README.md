@@ -31,7 +31,7 @@ With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns 
 
 ```
 $ agent-bridge
-╭─ agent-bridge v0.3.0 ──────────────────────────────────────────────╮
+╭─ agent-bridge v0.4.0 ──────────────────────────────────────────────╮
 │ Claude: default   Antigravity: gemini-3.8-flash-low                │
 │ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
 ╰────────────────────────────────────────────────────────────────────╯
@@ -60,9 +60,11 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/first [agent]` | Who speaks first |
 | `/perms [level]` | `none` (talk only) · `edits` (auto-accept file edits) · `auto` (edits + commands) |
 | `/workdir [path]` | Shared project folder (`default` = isolated per-run workspace) |
+| `/init` | Project wizard: 6 questions → `SPEC.md`, verify command, git repo, then starts the build |
 | `/spec <file>` | Start a conversation using a file (e.g. `SPEC.md`) as the task |
 | `/verify [cmd\|off\|run]` | A command that must pass before "done" counts, e.g. `/verify pytest -q` |
 | `/checkpoints [on\|off]` | Git-commit the workdir after every turn; with no argument, list the commits |
+| `/diff [turn\|all]` | Show the code changes of the latest turn, a given turn, or the whole conversation |
 | `/undo [turn]` | Revert the file changes of the last (or a given) turn; the agents are told |
 | `/summary [agent]` | Verdict (debates) or summary of the conversation, saved to `summary.md` |
 | `/judge [agent\|auto on\|auto off]` | Who judges, and whether debates get a verdict automatically |
@@ -72,6 +74,7 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/transcript [run]` | Open a transcript in your pager |
 | `/status` | Settings, sessions, tokens, cost and Claude usage |
 | `/config [show\|save\|reset]` | Save the current settings as your defaults |
+| `/notify [on\|off\|test]` | Desktop notification when a run ends on its own |
 | `/clear` · `/exit` | Clear the screen · quit |
 
 Defaults live in `~/.config/agent-bridge/config.toml`. Use `/config save`, or edit the file by hand.
@@ -94,12 +97,14 @@ Command-line flags override your saved defaults.
 - **Git checkpoints.** After every turn that changed files, the workdir is committed as `agent-bridge: turn N · Claude`, so `git log` shows who changed what. `/undo` reverts a turn with a revert commit (nothing is deleted) and tells the agents. Per-run workspaces get their own repo automatically. In your own project, checkpoints only start if the repo is clean, so your uncommitted work is never swept into an agent commit. Turn them off with `/checkpoints off` or `--no-checkpoints`.
 - **Stuck detection.** An agent is stopped after 10 minutes without any output (`--idle-timeout`) or 60 minutes in total (`--timeout`), then retried.
 - **Usage limits.** When Claude or Antigravity reports a usage limit, the run pauses immediately with the reset time, without wasting retries. `/continue` picks up exactly there. The status bar shows Claude's 5-hour window usage.
+- **Notifications.** When a run that took more than 30 seconds ends on its own (agreed, turn limit, verification failed, usage limit, error), you get a desktop notification via `notify-send`, so you can walk away from long builds. Your own Esc or `/pause` never notifies. Use `/notify off` or `--no-notify` to turn them off.
+- **Visible work.** Tool steps name their target ("⚙ Edit src/Bank.java", "⚙ Run mvn -q test"), and `/diff` shows each turn's code changes from its checkpoint.
 - **Verdicts.** When a debate ends, a fresh judge call (Claude by default; `/judge agy` to switch) reads the transcript and writes a verdict: winner, strongest arguments, common ground and weak spots. `/summary` works for any conversation, at any time.
 
 ## Building real projects
 
 1. **Use git.** Point the workdir (`/workdir` or `--workdir`) at a clean git repo. Every turn becomes a commit you can inspect or `/undo`.
-2. **Write a spec** (`SPEC.md`) with goals, requirements, and a clear **"Done when"** section, and back it with `/verify` so "done" is actually checked.
+2. **Start with `/init`.** It asks what to build, the stack, the must-haves, "done when" and the test command, then writes `SPEC.md`, sets up git and `/verify`, and starts the build. Or **write a spec** (`SPEC.md`) with goals, requirements, and a clear **"Done when"** section, and back it with `/verify` so "done" is actually checked.
 3. **Work in phases.** Use `/mode plan` to agree on a design, then `/mode build-review` per milestone, and commit between runs.
 4. **Use `/perms auto`** if the agents need to run tests. With `edits` they can change files but can't run commands.
 5. **Give the reviewer teeth** with `/roles`, e.g. *"QA: run the tests, try to break it, list concrete bugs with file:line"*.

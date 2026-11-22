@@ -7,7 +7,7 @@ import time
 
 from .. import config
 from .base import (Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError,
-                   looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
+                   describe_tool, looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
 
 PERM_FLAGS = {
     "none": ["--mode", "plan"],
@@ -36,8 +36,24 @@ class AgyAdapter(Adapter):
         return cmd + [f"--print={prompt}"]
 
     async def send(self, agent, prompt, ctx, on_text, on_tool) -> TurnResult:
+        res, streamed = await self._send_once(agent, prompt, ctx, on_text, on_tool)
+        if res.text or ctx.ephemeral:
+            return res
+        if streamed.strip():  # the final 'response' field can be empty even when text was streamed
+            res.text = streamed.strip()
+            return res
+        # It used tools and then stopped without a message. Ask for the reply in the same
+        # conversation (keeps its work) instead of redoing the whole turn.
+        on_text("")
+        nudge = "You ended your turn without writing a message. Write your reply to your partner now."
+        res2, streamed2 = await self._send_once(agent, nudge, ctx, on_text, on_tool)
+        res2.text = res2.text or streamed2.strip()
+        return res2
+
+    async def _send_once(self, agent, prompt, ctx, on_text, on_tool) -> tuple[TurnResult, str]:
         result: dict | None = None
         seen_steps: set[int] = set()
+        streamed: list[str] = []
         last_text_step: int | None = None
         junk: list[str] = []
 
@@ -54,13 +70,16 @@ class AgyAdapter(Adapter):
                 idx, kind = st.get("step_index"), st.get("step_type", "")
                 if kind == "agent_response":
                     if st.get("text_delta"):
+                        streamed.append(st["text_delta"])
                         if last_text_step is not None and idx != last_text_step:
                             on_text("\n\n")
                         last_text_step = idx
                         on_text(st["text_delta"])
                 elif kind and kind not in QUIET_STEPS and idx not in seen_steps:
                     seen_steps.add(idx)
-                    on_tool(kind)
+                    info = st.get("tool_info") or {}
+                    on_tool(describe_tool(st.get("tool_name") or info.get("name") or kind,
+                                          info.get("parameters"), ctx.workdir))
             elif ev == "result":
                 result = d.get("result") or {}
 
@@ -78,14 +97,14 @@ class AgyAdapter(Adapter):
         if ctx.ephemeral:
             tokens = (result.get("usage") or {}).get("total_tokens")
             return TurnResult(text=(result.get("response") or "").strip(), meta=f"{tokens} tok" if tokens else "",
-                              tokens=tokens)
+                              tokens=tokens), "".join(streamed)
         if not result.get("conversation_id"):
             raise AgentError("agy returned no conversation_id; cannot keep context")
         agent["session"] = result["conversation_id"]
         agent["started"] = True
         tokens = (result.get("usage") or {}).get("total_tokens")
         return TurnResult(text=(result.get("response") or "").strip(),
-                          meta=f"{tokens} tok" if tokens else "", tokens=tokens)
+                          meta=f"{tokens} tok" if tokens else "", tokens=tokens), "".join(streamed)
 
     def _cache_file(self):
         return config.cache_dir() / "agy_models.json"

@@ -1,11 +1,12 @@
 """Claude Code adapter (`claude -p --output-format stream-json`)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
 from .base import (Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError,
-                   looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
+                   describe_tool, looks_like_bad_model, looks_like_limit, parse_reset, stream_process)
 
 MODELS = [
     ("opus", "Opus (latest)"),
@@ -60,6 +61,7 @@ class ClaudeAdapter(Adapter):
         result: dict | None = None
         had_text = False
         junk: list[str] = []
+        tools: dict = {}  # content-block index → [tool name, streamed JSON input]
 
         def on_line(line: str) -> None:
             nonlocal result, had_text
@@ -75,7 +77,7 @@ class ClaudeAdapter(Adapter):
                 if et == "content_block_start":
                     block = ev.get("content_block") or {}
                     if block.get("type") == "tool_use":
-                        on_tool(block.get("name", "tool"))
+                        tools[ev.get("index")] = [block.get("name", "tool"), ""]
                     elif block.get("type") == "text" and had_text:
                         on_text("\n\n")
                 elif et == "content_block_delta":
@@ -83,6 +85,15 @@ class ClaudeAdapter(Adapter):
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         had_text = True
                         on_text(delta["text"])
+                    elif delta.get("type") == "input_json_delta" and ev.get("index") in tools:
+                        tools[ev.get("index")][1] += delta.get("partial_json") or ""
+                elif et == "content_block_stop" and ev.get("index") in tools:
+                    name, raw = tools.pop(ev.get("index"))
+                    try:
+                        params = json.loads(raw) if raw else {}
+                    except json.JSONDecodeError:
+                        params = {}
+                    on_tool(describe_tool(name, params, ctx.workdir))
             elif t == "rate_limit_event":
                 self._note_limits(d.get("rate_limit_info") or {})
             elif t == "result":
@@ -95,8 +106,8 @@ class ClaudeAdapter(Adapter):
         try:
             code, err = await stream_process(self.build_cmd(agent, prompt, ctx), ctx.workdir, ctx.timeout,
                                              on_line, ctx.idle_timeout)
-        except AgentError:
-            rotate()
+        except (AgentError, asyncio.CancelledError):
+            rotate()  # an interrupted first call may have claimed the session ID already
             raise
         if result is None or result.get("is_error") or result.get("subtype", "success") != "success":
             rotate()

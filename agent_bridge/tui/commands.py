@@ -386,6 +386,14 @@ async def cmd_spec(app: "App", args: list[str]) -> None:
     app.start_new(topic)
 
 
+@command("init", "Set up a project: answer 6 questions → SPEC.md, verify command, git, start")
+async def cmd_init(app: "App", args: list[str]) -> None:
+    if not _need_idle(app, "set up a new project"):
+        return
+    from .wizard import run_wizard
+    await run_wizard(app)
+
+
 @command("new", "Start a fresh conversation (next message is the topic)", aliases=("reset",))
 async def cmd_new(app: "App", args: list[str]) -> None:
     if not _need_idle(app, "start a new conversation"):
@@ -470,7 +478,7 @@ async def cmd_resume(app: "App", args: list[str]) -> None:
                 return
             run_dir = Path(choice)
     try:
-        app.engine = Engine.load(run_dir, app.adapters, app.renderer)
+        app.engine = Engine.load(run_dir, app.adapters, app.emit)
     except (OSError, ValueError, KeyError) as e:
         app.warn(f"Couldn't load {run_dir}: {e}")
         return
@@ -698,6 +706,66 @@ async def cmd_undo(app: "App", args: list[str]) -> None:
     (app.info if ok else app.warn)(msg + (" The agents will be told on their next turn." if ok else ""))
 
 
+def _diff_args(app, done):
+    if done or not app.engine:
+        return []
+    turns = sorted({str(e["turn"]) for e in app.engine.state.get("checkpoint_log", [])}, key=int)
+    return ["all", *turns]
+
+
+@command("diff", "Show the code changes from a turn (default: the latest)", "[turn|all]", args=_diff_args)
+async def cmd_diff(app: "App", args: list[str]) -> None:
+    from .. import workspace
+    if not app.engine:
+        app.warn("No conversation.")
+        return
+    log = app.engine.state.get("checkpoint_log", [])
+    if not log:
+        app.warn("No changes recorded yet. Checkpoints need file permissions (/perms edits or auto) and a "
+                 "git repo workdir; see /checkpoints.")
+        return
+    wd = app.engine.workdir
+    arg = args[0].lower() if args else ""
+    if arg == "all":
+        spec = [f"{log[0]['sha']}~1", log[-1]["sha"]]
+        title = f"All changes in this conversation (turns {log[0]['turn']}–{log[-1]['turn']})"
+        cmd = ["diff", "--stat", "--patch", *spec]
+    else:
+        if arg:
+            try:
+                t = int(arg)
+            except ValueError:
+                app.warn("Usage: /diff [turn|all]")
+                return
+            entries = [e for e in log if e["turn"] == t]
+            if not entries:
+                app.warn(f"Turn {t} didn't change any files. Turns with changes: "
+                         + ", ".join(sorted({str(e['turn']) for e in log}, key=int)))
+                return
+            e = entries[-1]
+        else:
+            e = log[-1]
+        who = NAMES.get(e.get("agent") or "", "")
+        title = f"Turn {e['turn']}{' · ' + who if who else ''} · {e['sha']}{' (reverted)' if e.get('reverted') else ''}"
+        cmd = ["show", "--stat", "--patch", "--format=", e["sha"]]
+    code, out = await workspace.git(wd, "-c", "color.ui=always", *cmd)
+    if code != 0:
+        app.warn(f"git failed: {out.strip()[:300]}")
+        return
+    if not out.strip():
+        app.info("No changes.")
+        return
+    pager = os.environ.get("PAGER") or ("less" if shutil.which("less") else "")
+    long = out.count("\n") > 40
+    if app.running() or not pager or not long:
+        app.console.print(Text(title, style="bold"))
+        body = out if not long else out.split("\n\n", 1)[0] + "\n… (long diff — run /diff again when idle to page it)"
+        app.console.print(Text.from_ansi(body.rstrip()))
+        return
+    argv = pager.split() + (["-R"] if pager.split()[0] == "less" else [])
+    await asyncio.to_thread(subprocess.run, argv, input=(f"{title}\n\n" + out).encode())
+
+
 @command("summary", "Write a verdict (debates) or summary of this conversation", "[claude|agy]",
          aliases=("verdict",), args=lambda app, done: list(AGENTS) if not done else [])
 async def cmd_summary(app: "App", args: list[str]) -> None:
@@ -731,6 +799,29 @@ async def cmd_judge(app: "App", args: list[str]) -> None:
     if app.engine:
         app.engine.set(judge=agent)
     app.info(f"Judge → {NAMES[agent]} (automatic debate verdict: {'on' if app.settings.auto_verdict else 'off'})")
+
+
+@command("notify", "Desktop notification when a run ends on its own", "[on|off|test]",
+         args=lambda app, done: ["on", "off", "test"] if not done else [])
+async def cmd_notify(app: "App", args: list[str]) -> None:
+    from .. import notify
+    sub = args[0].lower() if args else ""
+    if sub in ("on", "off"):
+        app.settings.notify = sub == "on"
+        app.info(f"Notifications → {sub}" + (f" (for runs longer than {app.settings.notify_after}s)" if sub == "on" else ""))
+    elif sub == "test":
+        if notify.send("agent-bridge", "Notifications work 🎉"):
+            app.info("Sent a test notification.")
+        else:
+            app.warn("Couldn't send: notify-send isn't installed or there's no desktop session "
+                     "(Arch: sudo pacman -S libnotify).")
+    elif not sub:
+        state = "on" if app.settings.notify else "off"
+        app.info(f"Notifications: {state} · runs longer than {app.settings.notify_after}s · "
+                 f"{'notify-send found' if notify.available() else 'notify-send unavailable'}\n"
+                 "  /notify on · /notify off · /notify test")
+    else:
+        app.warn("Usage: /notify [on|off|test]")
 
 
 @command("clear", "Clear the screen")

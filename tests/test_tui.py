@@ -1,5 +1,6 @@
 """Drive the interactive app with simulated keystrokes (fake agents, no quota)."""
 import asyncio
+import subprocess
 
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
@@ -268,3 +269,65 @@ def test_agy_models_cache_is_instant_and_refreshes(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
     assert asyncio.run(ad.list_models()) == [("new-model", "New Model")]
     assert ad.cached_models() == ([("new-model", "New Model")], True)
+
+
+def test_init_wizard_writes_spec_and_starts(monkeypatch, tmp_path):
+    proj = tmp_path / "proj"
+
+    async def script(app, inp):
+        inp.send_text("/init\r")
+        await asyncio.sleep(0.3)
+        inp.send_text("a tiny calculator\r")
+        await asyncio.sleep(0.2)
+        inp.send_text("Python\r")
+        await asyncio.sleep(0.2)
+        inp.send_text("add, subtract\r")
+        await asyncio.sleep(0.2)
+        inp.send_text("\r")  # accept default 'done when'
+        await asyncio.sleep(0.3)
+        inp.send_text("\r")  # first suggestion: python -m pytest -q
+        await asyncio.sleep(0.3)
+        inp.send_text("\x15" + str(proj) + "\r")  # ctrl-u clears the default folder
+        await asyncio.sleep(0.3)
+        inp.send_text("2")  # perms: edits
+        await asyncio.sleep(0.3)
+        inp.send_text("1")  # start now: yes
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running(), timeout=20)
+
+    app = run_script(monkeypatch, script)
+    spec = (proj / "SPEC.md").read_text()
+    assert "a tiny calculator" in spec and "- add\n- subtract" in spec
+    assert app.settings.verify == "python -m pytest -q" and app.settings.perms == "edits"
+    assert app.engine.state["workdir"] == str(proj.resolve())
+    log = subprocess.run(["git", "log", "--format=%s"], cwd=proj, capture_output=True, text=True).stdout
+    assert "Initial commit with SPEC.md" in log
+    assert "SPEC.md" in app.engine.state["topic"]
+
+
+def test_diff_and_notify_commands(monkeypatch):
+    sent = []
+    monkeypatch.setattr("agent_bridge.notify.send", lambda *a: sent.append(a) or True)
+
+    async def script(app, inp):
+        def writer(n, ctx):
+            (ctx.workdir / f"file{n}.txt").write_text("x\n" * n)
+        app.adapters["claude"].on_send = writer
+        inp.send_text("/perms edits\r")
+        await wait_for(lambda: app.settings.perms == "edits")
+        inp.send_text("/turns 2\r")
+        inp.send_text("make files\r")
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running())
+        inp.send_text("/diff\r")
+        inp.send_text("/diff 1\r")
+        inp.send_text("/diff all\r")
+        inp.send_text("/diff 99\r")
+        inp.send_text("/notify off\r")
+        await wait_for(lambda: app.settings.notify is False)
+        inp.send_text("/notify test\r")
+        await asyncio.sleep(0.4)
+
+    app = run_script(monkeypatch, script)
+    assert len(app.engine.state["checkpoint_log"]) == 1
+    assert sent and sent[-1][1] == "Notifications work 🎉"

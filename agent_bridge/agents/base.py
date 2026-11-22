@@ -70,6 +70,38 @@ class TurnResult:
 
 TextCb = Callable[[str], None]
 
+# tool name → verb shown to the user (Claude names first, then Antigravity's)
+_TOOL_VERBS = {
+    "edit": "Edit", "multiedit": "Edit", "write": "Write", "read": "Read", "bash": "Run",
+    "glob": "Find", "grep": "Search", "notebookedit": "Edit", "webfetch": "Fetch", "websearch": "Search web",
+    "read_file": "Read", "write_file": "Write", "write_to_file": "Write", "edit_file": "Edit",
+    "replace_file_content": "Edit", "multi_replace_file_content": "Edit", "view_file": "Read",
+    "run_command": "Run", "list_dir": "List", "find_by_name": "Find", "grep_search": "Search",
+    "codebase_search": "Search", "read_url_content": "Fetch", "search_web": "Search web",
+}
+_TARGET_KEYS = ("file_path", "path", "Path", "TargetFile", "AbsolutePath", "command", "CommandLine",
+                "pattern", "Pattern", "Query", "query", "url", "Url", "DirectoryPath", "SearchPath")
+
+
+def describe_tool(name: str, params: dict | None, workdir: Path | None = None) -> str:
+    """'Edit', {'file_path': '/w/src/a.py'} → 'Edit src/a.py'."""
+    verb = _TOOL_VERBS.get((name or "").lower(), name or "tool")
+    target = ""
+    for k in _TARGET_KEYS:
+        v = (params or {}).get(k)
+        if isinstance(v, str) and v.strip():
+            target = v.strip()
+            break
+    if target and workdir is not None:
+        wd = str(workdir).rstrip("/")
+        if target.startswith(wd + "/"):
+            target = target[len(wd) + 1:]
+        target = target.replace(wd + "/", "").replace(wd, ".")  # paths inside commands
+    target = " ".join(target.split())
+    if len(target) > 70:
+        target = target[:69] + "…"
+    return f"{verb} {target}".strip()
+
 
 class Adapter:
     name = ""

@@ -10,6 +10,7 @@ from . import __version__, config, store
 from .agents import make_adapters, missing_executables
 from .engine import Engine
 from .presets import AGENTS, EFFORTS, MODES, PERMS
+from .notify import Notifier
 from .render import Renderer, make_console, tilde
 
 EPILOG = """\
@@ -46,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--judge", choices=AGENTS, help="who writes the debate verdict (default claude)")
     ap.add_argument("--no-verdict", dest="auto_verdict", action="store_false", default=None,
                     help="skip the automatic verdict when a debate ends")
+    ap.add_argument("--no-notify", dest="notify", action="store_false", default=None,
+                    help="no desktop notification when the run ends")
     ap.add_argument("--retries", type=int)
     ap.add_argument("--max-words", type=int)
     ap.add_argument("--stop-token")
@@ -60,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 def apply_args(s: config.Settings, args: argparse.Namespace) -> None:
     for key in ("preset", "role_a", "role_b", "first", "turns", "perms", "workdir", "timeout", "retries",
                 "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort",
-                "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict"):
+                "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict", "notify"):
         v = getattr(args, key, None)
         if v is not None:
             setattr(s, key, v)
@@ -83,9 +86,15 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
         console.print(f"[red]Not found on PATH: {', '.join(missing)}[/]")
         return 2
     renderer = Renderer(console)
+    notifier = Notifier(lambda: s.notify, lambda: s.notify_after)
+
+    def emit(ev):
+        renderer(ev)
+        notifier(ev)
+
     if args.resume:
         try:
-            engine = Engine.load(args.resume, adapters, renderer)
+            engine = Engine.load(args.resume, adapters, emit)
         except (FileNotFoundError, ValueError) as e:
             console.print(f"[red]{e}[/]")
             return 2
@@ -106,7 +115,7 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
     else:
         if s.workdir and s.perms != "none":
             console.print(f"[yellow]⚠ agents may modify files in {s.workdir}[/]")
-        engine = Engine.new(s, args.topic, adapters, renderer)
+        engine = Engine.new(s, args.topic, adapters, emit)
 
     try:
         reason = asyncio.run(_headless(engine, console))

@@ -45,7 +45,7 @@ SCHEMA = 3
 V3_DEFAULTS = {
     "pending_notes": [], "idle_timeout": 600, "verify": "", "verify_timeout": 900, "checkpoints": True,
     "checkpoint_ok": None, "checkpoint_log": [], "own_workspace": False, "judge": "claude",
-    "auto_verdict": True, "last_verify": None,
+    "auto_verdict": True, "last_verify": None, "interrupted": None,
 }
 
 

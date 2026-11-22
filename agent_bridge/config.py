@@ -57,6 +57,8 @@ class Settings:
     checkpoints: bool = True  # git-commit the workdir after every turn
     judge: str = "claude"     # who writes /summary verdicts
     auto_verdict: bool = True  # write a verdict automatically when a debate ends
+    notify: bool = True       # desktop notification when a run ends on its own
+    notify_after: int = 30    # ...but only if it ran at least this many seconds
 
     def validate(self) -> list[str]:
         """Fix invalid values in place; return warnings."""
@@ -78,7 +80,7 @@ class Settings:
         for a in AGENTS:
             if getattr(self, f"{a}_effort") not in ("",) + EFFORTS:
                 reset(f"{a}_effort", "is not an effort level")
-        for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout"):
+        for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout", "notify_after"):
             if not isinstance(getattr(self, name), int) or getattr(self, name) < 1:
                 reset(name, "must be a positive integer")
         if not isinstance(self.retries, int) or self.retries < 0:

@@ -104,3 +104,12 @@ Deviation: `install.sh` falls back to a private virtual environment when `uv` is
 - [x] Idle timeout (no output) separate from the total timeout.
 - [x] Usage-limit detection: pause immediately with the reset time; Claude 5-hour usage in the status bar.
 - [x] Debate verdicts written by a fresh judge call; `/summary` for any conversation.
+
+## v0.4.0
+
+- [x] Desktop notifications when a run ends on its own (`/notify`, `--no-notify`).
+- [x] `/diff [turn|all]` from git checkpoints; tool steps name their target for both agents.
+- [x] `/init` wizard: SPEC.md, verify command, git repo with SPEC.md committed, then start.
+- [x] Interrupted turns: re-sent prompt is marked so it isn't answered twice; Claude rotates a half-created
+      session ID on cancel; mid-turn notes report their real recipient after Esc.
+- [x] Antigravity turns that end without a message get a nudge in the same conversation instead of a full retry.

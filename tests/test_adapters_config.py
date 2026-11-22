@@ -47,16 +47,20 @@ def test_claude_stream_parsing(tmp_path, monkeypatch):
         {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}},
         {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hel"}}},
         {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "lo"}}},
-        {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Edit"}}},
+        {"type": "stream_event", "event": {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "Edit"}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"file_path\": \"WD/src/"}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "app.py\"}"}}},
+        {"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}},
         {"type": "result", "subtype": "success", "is_error": False, "result": "Hello", "total_cost_usd": 0.01,
          "usage": {"input_tokens": 5, "output_tokens": 2}},
     ]]
+    lines = [l.replace("WD", str(tmp_path)) for l in lines]
     _fake_cli(tmp_path, "claude", lines)
     monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
     texts, tools = [], []
     agent = {"started": False, "session": "abc"}
     res = asyncio.run(ClaudeAdapter().send(agent, "hi", TurnContext(tmp_path, "none", 30, "S"), texts.append, tools.append))
-    assert "".join(texts) == "Hello" and tools == ["Edit"]
+    assert "".join(texts) == "Hello" and tools == ["Edit src/app.py"]
     assert res.text == "Hello" and res.cost == 0.01 and res.tokens == 7
     assert agent["started"] and agent["session"] == "abc"
 
@@ -78,8 +82,10 @@ def test_agy_stream_parsing(tmp_path, monkeypatch):
         {"event": "init", "conversation_id": "c1"},
         {"event": "step_update", "step_update": {"step_index": 0, "state": "DONE", "step_type": "user_input"}},
         {"event": "step_update", "step_update": {"step_index": 1, "state": "ACTIVE", "step_type": "agent_response", "text_delta": "A"}},
-        {"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "step_type": "run_command"}},
-        {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "run_command"}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "run_command",
+                                                 "tool_info": {"name": "run_command", "parameters": {"CommandLine": "mvn -q test"}}}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "tool", "tool_name": "run_command"}},
+        {"event": "step_update", "step_update": {"step_index": 4, "state": "ACTIVE", "step_type": "system_message"}},
         {"event": "step_update", "step_update": {"step_index": 3, "state": "ACTIVE", "step_type": "agent_response", "text_delta": "B"}},
         {"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": "B\n", "usage": {"total_tokens": 9}}},
     ]]
@@ -88,7 +94,7 @@ def test_agy_stream_parsing(tmp_path, monkeypatch):
     texts, tools = [], []
     agent = {"started": False, "session": None}
     res = asyncio.run(AgyAdapter().send(agent, "hi", TurnContext(tmp_path, "none", 30, "S"), texts.append, tools.append))
-    assert "".join(texts) == "A\n\nB" and tools == ["run_command"]
+    assert "".join(texts) == "A\n\nB" and tools == ["Run mvn -q test"]
     assert res.text == "B" and agent["session"] == "c1" and agent["started"]
 
 
@@ -129,3 +135,35 @@ def test_legacy_migration(tmp_path, monkeypatch):
     st = json.loads((new / "state.json").read_text())
     assert st["workdir"] == str(new / "workspace")
     assert not old.exists()
+
+
+def test_agy_empty_reply_gets_nudged_in_same_conversation(tmp_path, monkeypatch):
+    # 1st call: tool use, SUCCESS, empty response. 2nd call (nudge): real reply. Count calls via a file.
+    first = [json.dumps({"event": "step_update", "step_update": {"step_index": 1, "state": "ACTIVE", "step_type": "tool",
+                                                                 "tool_name": "read_file", "tool_info": {"parameters": {"Path": "x.py"}}}}),
+             json.dumps({"event": "result", "result": {"conversation_id": "c9", "status": "SUCCESS", "response": ""}})]
+    second = [json.dumps({"event": "result", "result": {"conversation_id": "c9", "status": "SUCCESS", "response": "Looks good."}})]
+    script = tmp_path / "agy"
+    script.write_text(f"""#!{sys.executable}
+import pathlib, sys
+c = pathlib.Path({str(tmp_path / 'count')!r})
+n = int(c.read_text()) if c.exists() else 0
+c.write_text(str(n + 1))
+pathlib.Path({str(tmp_path / 'args')!r} + str(n)).write_text(" ".join(sys.argv[1:]))
+for l in ({first!r} if n == 0 else {second!r}):
+    print(l)
+""")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    agent = {"started": False, "session": None}
+    res = asyncio.run(AgyAdapter().send(agent, "review it", TurnContext(tmp_path, "edits", 30, "S"), print, print))
+    assert res.text == "Looks good."
+    assert "--conversation c9" in (tmp_path / "args1").read_text()  # nudge continued the same conversation
+    assert "without writing a message" in (tmp_path / "args1").read_text()
+
+
+def test_describe_tool_shortens_workdir_in_commands():
+    from agent_bridge.agents.base import describe_tool
+    wd = Path("/home/u/proj")
+    assert describe_tool("Bash", {"command": "cd /home/u/proj && pytest -q"}, wd) == "Run cd . && pytest -q"
+    assert describe_tool("run_command", {"CommandLine": "ls /home/u/proj/src"}, wd) == "Run ls src"

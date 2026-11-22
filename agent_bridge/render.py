@@ -103,7 +103,7 @@ class Renderer:
                         align="left", style=color)
         elif k == "tool":
             self._flush()
-            self.c.print(Text(f"  ⚙ {TOOL_LABELS.get(ev.text, ev.text)}", style="dim"))
+            self.c.print(Text(f"  ⚙ {TOOL_LABELS.get(ev.text, ev.text)}", style="dim"), soft_wrap=True)
         elif k == "turn_end":
             self._flush()
             meta = ev.data.get("meta") or ""

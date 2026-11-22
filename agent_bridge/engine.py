@@ -136,6 +136,7 @@ class Engine:
         self.running = False
         self._pause = False
         self._in_turn = False
+        self._turn_cut = False
 
     @classmethod
     def new(cls, s: Settings, topic: str, adapters, emit=None) -> "Engine":
@@ -208,7 +209,12 @@ class Engine:
         other = other_of(me)
         a = s["agents"][me]
         brief = briefing(me, s["topic"], a["role"], s["stop"], s["perms"], s["max_words"], s.get("verify", ""))
-        notes = "".join(f"The bridge reports:\n{m}\n\n" for m in s["pending_notes"])
+        notes = ""
+        intr = s.get("interrupted")
+        if intr and intr.get("agent") == me and a["started"]:
+            notes += ("(Your previous turn was interrupted before you finished, so the message below is being "
+                      "re-sent. If you already see it above, answer it once — don't treat it as a new request.)\n\n")
+        notes += "".join(f"The bridge reports:\n{m}\n\n" for m in s["pending_notes"])
         notes += "".join(f"The user says:\n{m}\n\n" for m in s["pending_user"])
         last = s["last_msg"]
         if not a["started"]:
@@ -231,6 +237,9 @@ class Engine:
         self._in_turn = True
         try:
             return await self._do_turn()
+        except asyncio.CancelledError:
+            self._turn_cut = True
+            raise
         finally:
             self._in_turn = False
 
@@ -277,6 +286,7 @@ class Engine:
         s["pending_user"] = s["pending_user"][used_user:]
         s["pending_notes"] = s["pending_notes"][used_notes:]
         s["last_msg"], s["last_speaker"] = reply, me
+        s["interrupted"] = None
         s["turn"] += 1
         s["next"] = other_of(me)
         self.save()
@@ -418,6 +428,7 @@ class Engine:
         Returns: agreed | limit | paused | verify_failed | usage_limit | error | interrupted."""
         s = self.state
         self._pause = False
+        self._turn_cut = False
         self.running = True
         self.emit(Event("run_start", data={"run_dir": s["run_dir"], "workdir": s["workdir"]}))
         reason, detail = "limit", {}
@@ -450,6 +461,11 @@ class Engine:
             if reason in ("agreed", "limit") and s.get("auto_verdict") and s.get("preset") == "debate" and s["turn"]:
                 await self.summarize()
         except asyncio.CancelledError:
+            if self._turn_cut:
+                s["interrupted"] = {"agent": s["next"], "turn": s["turn"] + 1}
+                if s["pending_user"]:
+                    self.emit(Event("notice", text=f"Your message will go to {NAMES[s['next']]}, whose turn "
+                                                   f"was interrupted, when you continue."))
             try:
                 await self._checkpoint(s["turn"] + 1, s["next"], "interrupted, partial")
             except Exception:
@@ -472,6 +488,6 @@ class Engine:
         if reason == "agreed":
             store.append_transcript(self.state, f"\n---\n_Both agents agreed the task is done "
                                                 f"(turn {self.state['turn']})._\n")
-        self.emit(Event("done", data={"reason": reason, "turn": self.state["turn"],
+        self.emit(Event("done", data={"reason": reason, "turn": self.state["turn"], "topic": self.state["topic"],
                                       "max_turns": self.state["max_turns"], "run_dir": self.state["run_dir"],
                                       "cost": self.cost, **(detail or {})}))
