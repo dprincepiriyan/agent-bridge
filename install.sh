@@ -25,6 +25,7 @@ else
   "$VENV/bin/python" -m pip install --quiet --upgrade pip
   "$VENV/bin/python" -m pip install --quiet --editable "$REPO"
   ln -sf "$VENV/bin/agent-bridge" "$BIN/agent-bridge"
+  ln -sf "$VENV/bin/abr" "$BIN/abr"
 fi
 
 case ":$PATH:" in

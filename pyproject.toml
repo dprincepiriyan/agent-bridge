@@ -19,6 +19,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 agent-bridge = "agent_bridge.cli:main"
+abr = "agent_bridge.cli:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "agent_bridge.__version__" }

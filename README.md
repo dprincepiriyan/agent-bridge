@@ -2,7 +2,7 @@
 
 Let **Claude Code** (`claude`) and **Antigravity** (`agy`) talk to each other through their CLIs: debate a question, plan a design, or build and review a project together, taking turns until both agree it's done.
 
-Run `agent-bridge` for an interactive app in the style of Claude Code, with `/` commands, model pickers, live streaming and a status bar. You can also pass a topic for a one-shot run from scripts.
+Run `agent-bridge` (or just **`abr`**) for an interactive app in the style of Claude Code, with `/` commands, model pickers, live streaming and a status bar. You can also pass a topic for a one-shot run from scripts.
 
 ```
  you ──topic──► agent-bridge
@@ -23,7 +23,7 @@ git clone git@github.com:dprincepiriyan/agent-bridge.git ~/agent-bridge
 ~/agent-bridge/install.sh
 ```
 
-The installer uses `uv` if you have it. Otherwise it creates a private virtual environment in `~/.local/share/agent-bridge/venv`. Either way it puts `agent-bridge` in `~/.local/bin`. The install is editable, so after a `git pull` the command uses the new code immediately.
+The installer uses `uv` if you have it. Otherwise it creates a private virtual environment in `~/.local/share/agent-bridge/venv`. Either way it puts `agent-bridge` and its short alias **`abr`** in `~/.local/bin`. The install is editable, so after a `git pull` the command uses the new code immediately.
 
 With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns count against your subscription limits and aren't billed per token. The `~$` figures are API-price estimates, not charges.
 
