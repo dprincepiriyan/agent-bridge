@@ -1,35 +1,15 @@
-"""Static choices: agents, role presets, permission levels, efforts."""
+"""Static choices: agents, modes, permission levels, efforts."""
 
 AGENTS = ("claude", "agy")
 NAMES = {"claude": "Claude", "agy": "Antigravity"}
 
 STOP_DEFAULT = "[[DONE]]"
 
-# name: (description, role for the first speaker, role for the second speaker)
-ROLE_PRESETS = {
-    "build-review": (
-        "One builds, the other reviews",
-        "Implementer: propose concrete designs and write the code/solution.",
-        "Reviewer: critique for correctness, security, edge cases and simplicity; demand fixes.",
-    ),
-    "plan": (
-        "One designs, the other stress-tests",
-        "Architect: propose a concrete step-by-step plan with trade-offs.",
-        "Skeptic: stress-test the plan, find risks and missing steps, propose improvements.",
-    ),
-    "debate": (
-        "Argue opposite sides",
-        "Argue FOR the proposition / the first position. Push hard, concede only to strong evidence.",
-        "Argue AGAINST / the opposing position. Find weaknesses, counter-examples and hidden costs.",
-    ),
-    "brainstorm": (
-        "Generate and refine ideas",
-        "Generate bold, unconventional ideas and build on the partner's ideas.",
-        "Generate practical ideas, filter and refine the strongest ones, keep a ranked shortlist.",
-    ),
-}
-CUSTOM = "custom"
-MODES = tuple(ROLE_PRESETS) + (CUSTOM,)
+from .roles import CUSTOM, ROLES, TEAMS  # noqa: E402
+
+# mode name: (description, first speaker's role text, second speaker's role text)
+ROLE_PRESETS = {k: (t.summary, ROLES[t.first].text, ROLES[t.second].text) for k, t in TEAMS.items()}
+MODES = tuple(TEAMS) + (CUSTOM,)
 
 PERMS = {
     "none": "Talk only, no tools",

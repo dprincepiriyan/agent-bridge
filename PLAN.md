@@ -118,3 +118,11 @@ Deviation: `install.sh` falls back to a private virtual environment when `uv` is
 
 - [x] `/publish`: create a GitHub repo (via `gh`, or a pasted URL over SSH) and push; private by default,
       confirmation before every push, leftovers committed only with consent, never force-pushes.
+
+## v0.6.0
+
+- [x] Role library (orchestrator, architect, coder, reviewer, tester, debugger, security, designer, docs, devops,
+      product, skeptic, advocate, critic, ideator, refiner, custom) assignable per agent.
+- [x] `/role` (picker, direct, swap, live changes announced to both agents), `/roles`, `/mode` as team presets,
+      `--claude-role` / `--agy-role`, a "who does what" step in `/init`.
+- [x] Briefings include the partner's role; lead roles open; single assignments get a fitting partner role.

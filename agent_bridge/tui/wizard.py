@@ -9,11 +9,26 @@ from prompt_toolkit.completion import PathCompleter
 from rich.text import Text
 
 from .. import workspace
+from ..engine import role_for
+from ..presets import NAMES
 from ..render import tilde
+from ..roles import role_name
 from .pickers import ask_text, confirm, pick
 
 if TYPE_CHECKING:
     from .app import App
+
+# (team:first speaker, label, description)
+TEAM_CHOICES = [
+    ("build-review:claude", "Claude codes · Antigravity reviews", "classic pair"),
+    ("build-review:agy", "Antigravity codes · Claude reviews", ""),
+    ("orchestrated:agy", "Antigravity orchestrates · Claude codes", "one plans and assigns tasks"),
+    ("orchestrated:claude", "Claude orchestrates · Antigravity codes", ""),
+    ("design-build:claude", "Claude architects · Antigravity codes", "design first, then build"),
+    ("design-build:agy", "Antigravity architects · Claude codes", ""),
+    ("build-test:claude", "Claude codes · Antigravity tests", "QA tries to break it"),
+    ("build-test:agy", "Antigravity codes · Claude tests", ""),
+]
 
 DEFAULT_DONE = "All tests pass and the README explains how to build, run and test it."
 
@@ -123,6 +138,10 @@ async def run_wizard(app: "App") -> None:
     if perms is None:
         return
 
+    team = await pick("Who does what?", TEAM_CHOICES)
+    if team is None:
+        return
+
     spec_path = wd / "SPEC.md"
     if spec_path.exists() and not await confirm(f"{tilde(spec_path)} exists. Overwrite it?"):
         return
@@ -151,12 +170,15 @@ async def run_wizard(app: "App") -> None:
         spec_path.write_text(spec)
 
     s = app.settings
-    s.workdir, s.verify, s.perms, s.preset = str(wd), verify, perms, "build-review"
+    preset, first = team.split(":")
+    s.workdir, s.verify, s.perms, s.preset, s.first = str(wd), verify, perms, preset, first
     s.role_a = s.role_b = ""
+    s.claude_role = s.agy_role = ""  # follow the chosen team
     s.turns = max(s.turns, 16)
     app.engine = None
     say(f"\nWrote {tilde(spec_path)}" + (f" ({repo_note})" if repo_note else ""))
-    say(f"  mode build-review · perms {perms} · turns {s.turns} · verify {verify or '(none)'}\n"
+    roles = " · ".join(f"{NAMES[a]}: {role_name(role_for(s, a)[0])}" for a in ("claude", "agy"))
+    say(f"  {roles}\n  mode {preset} · perms {perms} · turns {s.turns} · verify {verify or '(none)'}\n"
         f"  workdir {tilde(wd)}")
     if perms == "auto":
         app.warn("  auto lets both agents edit files and run commands in that folder.")

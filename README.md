@@ -31,7 +31,7 @@ With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns 
 
 ```
 $ agent-bridge
-╭─ agent-bridge v0.5.0 ──────────────────────────────────────────────╮
+╭─ agent-bridge v0.6.0 ──────────────────────────────────────────────╮
 │ Claude: default   Antigravity: gemini-3.8-flash-low                │
 │ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
 ╰────────────────────────────────────────────────────────────────────╯
@@ -54,8 +54,9 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/help` | List all commands |
 | `/model [agent] [model]` | Pick a model per agent. Accepts IDs or names, e.g. `/model agy Gemini 4 Argon (High)` or `/model agy argon high`; ambiguous names open a picker |
 | `/effort [agent] [level]` | Reasoning effort: low, medium, high, xhigh, max |
-| `/mode [mode]` | Type of work: `build-review`, `plan`, `debate`, `brainstorm`, `custom` |
-| `/roles` | Write custom roles for each agent |
+| `/role [agent] [role]` | Give an agent a role (`/role agy orchestrator`), or `/role swap`; works mid-conversation too |
+| `/roles` | Show who does what and every available role |
+| `/mode [mode]` | Team preset: `build-review`, `orchestrated`, `design-build`, `build-test`, `secure-build`, `plan`, `debate`, `brainstorm`, `custom` |
 | `/turns [n]` | Max turns for this conversation and the default for new ones |
 | `/first [agent]` | Who speaks first |
 | `/perms [level]` | `none` (talk only) · `edits` (auto-accept file edits) · `auto` (edits + commands) |
@@ -91,6 +92,37 @@ agent-bridge --help
 ```
 
 Command-line flags override your saved defaults.
+
+## Roles: who does what
+
+Each agent gets a role from a built-in library, and you choose which agent gets which:
+
+| Role | What it does |
+|---|---|
+| `orchestrator` | Plans the work, gives one assignment per turn, tracks a checklist, decides when it's done |
+| `architect` | Designs modules, interfaces, data model and tech choices (in `ARCHITECTURE.md`) |
+| `coder` | Writes the code and tests, and runs them |
+| `reviewer` | Reviews for bugs, security, edge cases and simplicity |
+| `tester` | Writes and runs tests, tries to break it, reports bugs with steps |
+| `debugger` | Reproduces problems and finds root causes |
+| `security` | Threat-models and hunts for vulnerabilities |
+| `designer` | UI/UX: layout, flows, accessibility |
+| `docs` · `devops` · `product` | README and docs · build, scripts and CI · requirements and scope |
+| `skeptic` · `advocate` · `critic` · `ideator` · `refiner` | Planning, debating and brainstorming roles |
+| `custom` | Write your own |
+
+```
+/role agy orchestrator     # Antigravity leads; Claude gets a fitting partner role (coder)
+/role claude tester        # explicit roles are never overridden
+/role swap                 # trade roles
+/mode orchestrated         # or pick a ready-made team
+abr "Build a ping pong game" --agy-role orchestrator --claude-role coder --perms auto
+```
+
+- **Briefings:** each agent is told its own role and its partner's.
+- **Who opens:** lead roles (orchestrator, architect, product manager) speak first automatically.
+- **Mid-conversation changes:** both agents are told about the switch on their next turn.
+- **`/init`:** asks "who does what?" (e.g. *Antigravity orchestrates · Claude codes*).
 
 ## Safety nets for long runs
 

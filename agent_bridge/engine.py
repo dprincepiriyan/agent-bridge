@@ -16,7 +16,8 @@ from typing import Callable
 from . import store, workspace
 from .agents.base import Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError
 from .config import Settings
-from .presets import AGENTS, CUSTOM, NAMES, ROLE_PRESETS
+from .presets import AGENTS, NAMES
+from .roles import CUSTOM, ROLES, TEAMS, role_name
 
 
 @dataclass
@@ -33,12 +34,37 @@ def other_of(agent: str) -> str:
     return "agy" if agent == "claude" else "claude"
 
 
+def role_for(s: Settings, agent: str) -> tuple[str, str]:
+    """(role key, role text) for an agent: its own assignment, else what the mode gives it."""
+    key = getattr(s, f"{agent}_role", "")
+    if key == CUSTOM:
+        text = getattr(s, f"{agent}_role_text", "").strip()
+        if text:
+            return CUSTOM, text
+        key = ""
+    if key in ROLES:
+        return key, ROLES[key].text
+    first = agent == s.first
+    legacy = (s.role_a if first else s.role_b).strip()
+    if legacy:
+        return CUSTOM, legacy
+    team = TEAMS.get(s.preset) or TEAMS["build-review"]
+    k = team.first if first else team.second
+    return k, ROLES[k].text
+
+
 def resolve_roles(s: Settings) -> tuple[str, str]:
-    base = ROLE_PRESETS.get(s.preset, ROLE_PRESETS["build-review"])
-    return (s.role_a or base[1]), (s.role_b or base[2])
+    """Role texts for (first speaker, second speaker)."""
+    return role_for(s, s.first)[1], role_for(s, other_of(s.first))[1]
 
 
-def briefing(me: str, topic: str, role: str, stop: str, perms: str, max_words: int, verify: str = "") -> str:
+def is_debate(state: dict) -> bool:
+    keys = {state["agents"][a].get("role_key") for a in AGENTS}
+    return state.get("preset") == "debate" or keys == {"advocate", "critic"}
+
+
+def briefing(me: str, topic: str, role: str, stop: str, perms: str, max_words: int, verify: str = "",
+             role_title: str = "", partner_role: str = "", partner_title: str = "") -> str:
     other = other_of(me)
     tools = ("Do NOT use any tools; just think and write." if perms == "none" else
              "You may read/edit files in the current working directory (shared with your partner) when useful"
@@ -52,7 +78,8 @@ add messages marked "The user says:" — treat those as priority instructions fo
 TOPIC / TASK:
 {topic}
 
-YOUR ROLE: {role}
+YOUR ROLE{f" — {role_title}" if role_title else ""}: {role}
+{f"YOUR PARTNER'S ROLE ({NAMES[other]}{' — ' + partner_title if partner_title else ''}): {partner_role}" if partner_role else ""}
 
 RULES:
 - Address {NAMES[other]} directly. Be substantive and specific; don't just agree or flatter.
@@ -72,9 +99,12 @@ def new_state(s: Settings, topic: str) -> dict:
     run_dir = store.new_run_dir()
     workdir = Path(s.workdir).expanduser().resolve() if s.workdir else run_dir / "workspace"
     workdir.mkdir(parents=True, exist_ok=True)
-    ra, rb = resolve_roles(s)
     first, second = s.first, other_of(s.first)
-    agents = {first: {"role": ra}, second: {"role": rb}}
+    agents = {}
+    for a in AGENTS:
+        key, text = role_for(s, a)
+        agents[a] = {"role": text, "role_key": key}
+    ra, rb = agents[first]["role"], agents[second]["role"]
     for a in AGENTS:
         agents[a].update(started=False, session=None, model=getattr(s, f"{a}_model"),
                          effort=getattr(s, f"{a}_effort"), cost=0.0, tokens=0)
@@ -94,7 +124,8 @@ def new_state(s: Settings, topic: str) -> dict:
     store.save_state(state)
     store.append_transcript(state, (
         f"# Agent Bridge — {run_dir.name}\n\n**Topic:** {topic}\n\n"
-        f"- {NAMES[first]}: {ra}\n- {NAMES[second]}: {rb}\n- mode: {s.preset} · permissions: {s.perms}"
+        f"- {NAMES[first]} ({role_name(agents[first]['role_key'])}): {ra}\n"
+        f"- {NAMES[second]} ({role_name(agents[second]['role_key'])}): {rb}\n- mode: {s.preset} · permissions: {s.perms}"
         f" · workdir: {workdir}\n" + (f"- verify: `{s.verify}`\n" if s.verify else "")))
     return state
 
@@ -172,9 +203,29 @@ class Engine:
         to = other_of(nxt) if self._in_turn else nxt  # mid-turn notes go to the partner who replies next
         self.emit(Event("user_msg", text=text, data={"to": to}))
 
-    def add_note(self, text: str) -> None:
-        """A message from the bridge itself (verification failures, reverts) for the next agent."""
-        self.state["pending_notes"].append(text)
+    def add_note(self, text: str, to: str | None = None) -> None:
+        """A message from the bridge itself for the next agent (to=None) or for one specific agent."""
+        self.state["pending_notes"].append({"to": to, "text": text})
+        self.save()
+
+    def _normalize_notes(self) -> None:
+        self.state["pending_notes"] = [n if isinstance(n, dict) else {"to": None, "text": n}
+                                       for n in self.state.get("pending_notes", [])]
+
+    def _notes_for(self, agent: str) -> list[dict]:
+        self._normalize_notes()
+        return [n for n in self.state["pending_notes"] if n.get("to") in (None, agent)]
+
+    def set_role(self, agent: str, key: str, text: str) -> None:
+        """Change an agent's role mid-conversation; both agents are told on their next turn."""
+        a = self.state["agents"][agent]
+        old = role_name(a.get("role_key", "")) if a.get("role_key") else "its previous role"
+        a["role"], a["role_key"] = text, key
+        new = role_name(key)
+        self.add_note(f"The user changed your role from {old} to {new}. From now on: {text}", to=agent)
+        self.add_note(f"The user changed {NAMES[agent]}'s role from {old} to {new}: {text}",
+                      to=other_of(agent))
+        store.append_transcript(self.state, f"\n> **You:** {NAMES[agent]} is now {new}\n")
         self.save()
 
     def request_pause(self) -> None:
@@ -208,13 +259,16 @@ class Engine:
         s = self.state
         other = other_of(me)
         a = s["agents"][me]
-        brief = briefing(me, s["topic"], a["role"], s["stop"], s["perms"], s["max_words"], s.get("verify", ""))
+        p = s["agents"][other]
+        brief = briefing(me, s["topic"], a["role"], s["stop"], s["perms"], s["max_words"], s.get("verify", ""),
+                         role_name(a.get("role_key", "")) if a.get("role_key") else "", p.get("role", ""),
+                         role_name(p.get("role_key", "")) if p.get("role_key") else "")
         notes = ""
         intr = s.get("interrupted")
         if intr and intr.get("agent") == me and a["started"]:
             notes += ("(Your previous turn was interrupted before you finished, so the message below is being "
                       "re-sent. If you already see it above, answer it once — don't treat it as a new request.)\n\n")
-        notes += "".join(f"The bridge reports:\n{m}\n\n" for m in s["pending_notes"])
+        notes += "".join(f"The bridge reports:\n{n['text']}\n\n" for n in self._notes_for(me))
         notes += "".join(f"The user says:\n{m}\n\n" for m in s["pending_user"])
         last = s["last_msg"]
         if not a["started"]:
@@ -247,7 +301,8 @@ class Engine:
         s = self.state
         me = s["next"]
         a = s["agents"][me]
-        used_user, used_notes = len(s["pending_user"]), len(s["pending_notes"])
+        used_user = len(s["pending_user"])
+        used_notes = [id(n) for n in self._notes_for(me)]  # notes sent in this prompt
         prompt, brief = self._prompt(me)
         label = f"Turn {s['turn'] + 1}/{s['max_turns']}"
         self.emit(Event("turn_start", me, label))
@@ -284,7 +339,7 @@ class Engine:
         self.emit(Event("turn_end", me, data={"secs": secs, "meta": res.meta, "reply": reply}))
         store.append_transcript(s, f"\n## {label} · {NAMES[me]}\n\n{reply}\n")
         s["pending_user"] = s["pending_user"][used_user:]
-        s["pending_notes"] = s["pending_notes"][used_notes:]
+        s["pending_notes"] = [n for n in s["pending_notes"] if id(n) not in used_notes]
         s["last_msg"], s["last_speaker"] = reply, me
         s["interrupted"] = None
         s["turn"] += 1
@@ -398,7 +453,7 @@ class Engine:
         if len(transcript) > MAX_TRANSCRIPT:
             transcript = (transcript[:8000] + "\n\n[… middle of the transcript omitted for length …]\n\n"
                           + transcript[-(MAX_TRANSCRIPT - 8000):])
-        debate = s.get("preset") == "debate"
+        debate = is_debate(s)
         title = "Verdict" if debate else "Summary"
         prompt = (f"{VERDICT_PROMPT if debate else SUMMARY_PROMPT}\n\nTOPIC:\n{s['topic']}\n\n"
                   f"TRANSCRIPT:\n<transcript>\n{transcript}\n</transcript>")
@@ -458,7 +513,7 @@ class Engine:
                 else:
                     s["stop_pending"] = None
                 self.save()
-            if reason in ("agreed", "limit") and s.get("auto_verdict") and s.get("preset") == "debate" and s["turn"]:
+            if reason in ("agreed", "limit") and s.get("auto_verdict") and is_debate(s) and s["turn"]:
                 await self.summarize()
         except asyncio.CancelledError:
             if self._turn_cut:

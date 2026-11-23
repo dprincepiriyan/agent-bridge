@@ -58,7 +58,8 @@ def test_settings_commands_and_a_run(monkeypatch):
     st = app.engine.state
     assert st["turn"] == 3 and st["next"] == "claude"  # agy, claude, agy
     assert st["agents"]["claude"]["model"] == "opus"
-    assert "YOUR ROLE: Argue FOR" in app.adapters["agy"].prompts[0]
+    assert "YOUR ROLE — Advocate (for): Argue FOR" in app.adapters["agy"].prompts[0]
+    assert "YOUR PARTNER'S ROLE (Claude — Critic (against))" in app.adapters["agy"].prompts[0]
     assert app.adapters["agy"].calls[0]["effort"] == "high"
 
 
@@ -66,7 +67,7 @@ def test_picker_selection_and_config_save(monkeypatch):
     async def script(app, inp):
         inp.send_text("/mode\r")
         await asyncio.sleep(0.3)
-        inp.send_text("3")  # 3rd option in the picker = debate
+        inp.send_text("7")  # 7th option in the picker = debate
         await wait_for(lambda: app.settings.preset == "debate")
         inp.send_text("/perms\r")
         await asyncio.sleep(0.3)
@@ -291,6 +292,8 @@ def test_init_wizard_writes_spec_and_starts(monkeypatch, tmp_path):
         await asyncio.sleep(0.3)
         inp.send_text("2")  # perms: edits
         await asyncio.sleep(0.3)
+        inp.send_text("3")  # who does what: Antigravity orchestrates · Claude codes
+        await asyncio.sleep(0.3)
         inp.send_text("1")  # start now: yes
         await wait_for(lambda: app.engine is not None)
         await wait_for(lambda: not app.running(), timeout=20)
@@ -299,6 +302,9 @@ def test_init_wizard_writes_spec_and_starts(monkeypatch, tmp_path):
     spec = (proj / "SPEC.md").read_text()
     assert "a tiny calculator" in spec and "- add\n- subtract" in spec
     assert app.settings.verify == "python -m pytest -q" and app.settings.perms == "edits"
+    assert app.settings.preset == "orchestrated" and app.settings.first == "agy"
+    assert app.engine.state["agents"]["agy"]["role_key"] == "orchestrator"
+    assert app.engine.state["agents"]["claude"]["role_key"] == "coder"
     assert app.engine.state["workdir"] == str(proj.resolve())
     log = subprocess.run(["git", "log", "--format=%s"], cwd=proj, capture_output=True, text=True).stdout
     assert "Initial commit with SPEC.md" in log
@@ -331,3 +337,31 @@ def test_diff_and_notify_commands(monkeypatch):
     app = run_script(monkeypatch, script)
     assert len(app.engine.state["checkpoint_log"]) == 1
     assert sent and sent[-1][1] == "Notifications work 🎉"
+
+
+def test_role_commands(monkeypatch):
+    async def script(app, inp):
+        inp.send_text("/role agy orchestrator\r")
+        await wait_for(lambda: app.settings.agy_role == "orchestrator")
+        assert app.settings.first == "agy"  # orchestrator opens
+        assert app.settings.claude_role == "coder"  # fitting partner, since Claude followed the mode
+        inp.send_text("/role claude custom\r")
+        await asyncio.sleep(0.3)
+        inp.send_text("\x15Write only Rust.\r")
+        await wait_for(lambda: app.settings.claude_role == "custom")
+        inp.send_text("/role swap\r")
+        await wait_for(lambda: app.settings.claude_role == "orchestrator")
+        assert app.settings.agy_role == "custom" and app.settings.agy_role_text == "Write only Rust."
+        inp.send_text("/roles\r")
+        inp.send_text("/role claude wizard\r")  # unknown → warning, unchanged
+        inp.send_text("/turns 2\r")
+        inp.send_text("plan the thing\r")
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running())
+        inp.send_text("/role agy tester\r")  # live change
+        await wait_for(lambda: app.engine.state["agents"]["agy"]["role_key"] == "tester")
+
+    app = run_script(monkeypatch, script)
+    assert app.engine.state["agents"]["claude"]["role_key"] == "orchestrator"
+    notes = app.engine.state["pending_notes"]
+    assert {n["to"] for n in notes} == {"agy", "claude"}

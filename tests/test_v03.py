@@ -86,7 +86,7 @@ def test_checkpoints_in_own_workspace_and_undo():
     ok, msg = asyncio.run(eng.undo())
     assert ok and "turn 3" in msg
     assert not (wd / "c2.txt").exists() and (wd / "a1.txt").exists()
-    assert "reverted the file changes from turn 3" in eng.state["pending_notes"][0]
+    assert "reverted the file changes from turn 3" in eng.state["pending_notes"][0]["text"]
 
 
 def test_no_checkpoints_when_perms_none():

@@ -15,9 +15,11 @@ from rich.table import Table
 from rich.text import Text
 
 from .. import config, store
-from ..engine import Engine, resolve_roles
+from ..config import Settings
+from ..engine import Engine, resolve_roles, role_for
 from ..agents.models import match_models
-from ..presets import AGENTS, CUSTOM, EFFORTS, MODES, NAMES, PERMS, ROLE_PRESETS
+from ..presets import AGENTS, EFFORTS, MODES, NAMES, PERMS
+from ..roles import CUSTOM, LEADS, PARTNER, ROLES, TEAMS, role_name
 from .pickers import ask_text, confirm, pick
 
 if TYPE_CHECKING:
@@ -239,45 +241,165 @@ async def cmd_effort(app: "App", args: list[str]) -> None:
         _apply_agent_setting(app, agent, "effort", choice)
 
 
-@command("mode", "Type of work: build-review, plan, debate, brainstorm, custom", "[mode]",
-         args=lambda app, done: list(MODES) if not done else [])
+def _other(agent: str) -> str:
+    return "agy" if agent == "claude" else "claude"
+
+
+def assignment(app: "App") -> str:
+    """'Claude: Coder · Antigravity: Reviewer' for the settings (new conversations)."""
+    return " · ".join(f"{NAMES[a]}: {role_name(role_for(app.settings, a)[0])}" for a in AGENTS)
+
+
+def _live_roles(app: "App") -> str:
+    st = app.engine.state
+    return " · ".join(f"{NAMES[a]}: {role_name(st['agents'][a].get('role_key') or CUSTOM)}" for a in AGENTS)
+
+
+def _mode_args(app, done):
+    return list(MODES) if not done else []
+
+
+@command("mode", "Team preset: who does what (build-review, orchestrated, design-build, debate…)", "[mode]",
+         args=_mode_args)
 async def cmd_mode(app: "App", args: list[str]) -> None:
+    s = app.settings
     if args:
         choice = args[0].lower()
         if choice not in MODES:
             app.warn(f"Mode must be one of: {', '.join(MODES)}")
             return
     else:
-        opts = [(k, k, v[0]) for k, v in ROLE_PRESETS.items()] + [(CUSTOM, CUSTOM, "write your own roles")]
-        choice = await pick("Type of work", opts, app.settings.preset)
+        first, second = s.first, _other(s.first)
+        opts = [(k, k, f"{t.summary} — {NAMES[first]}: {ROLES[t.first].name}, {NAMES[second]}: "
+                       f"{ROLES[t.second].name}") for k, t in TEAMS.items()]
+        opts.append((CUSTOM, CUSTOM, "pick each agent's role yourself (/role)"))
+        choice = await pick("Team preset (roles follow who speaks first; /first to flip)", opts, s.preset)
         if choice is None:
             return
-    app.settings.preset = choice
+    s.preset = choice
+    s.role_a = s.role_b = ""
     if choice == CUSTOM:
-        await cmd_roles(app, [])
+        for a in AGENTS:
+            if not await _choose_role(app, a):
+                break
     else:
-        app.settings.role_a = app.settings.role_b = ""
-    ra, rb = resolve_roles(app.settings)
-    first, second = app.settings.first, "agy" if app.settings.first == "claude" else "claude"
-    app.info(f"Mode → {choice}\n  {NAMES[first]}: {ra}\n  {NAMES[second]}: {rb}")
+        s.claude_role = s.agy_role = ""  # follow the mode
+    app.info(f"Mode → {choice}  ({assignment(app)})")
     if app.engine:
-        app.info("Applies to new conversations (/new).")
+        app.info("Applies to new conversations (/new). To change roles in this conversation, use /role.")
 
 
-@command("roles", "Write custom roles for each agent")
+async def _choose_role(app: "App", agent: str) -> bool:
+    s = app.settings
+    current = getattr(s, f"{agent}_role")
+    follow_key = role_for(Settings(**{**s.__dict__, f"{agent}_role": ""}), agent)[0]
+    opts = [("__mode__", "follow the mode", f"{s.preset} gives {NAMES[agent]}: {role_name(follow_key)}")]
+    opts += [(k, r.name, r.summary) for k, r in ROLES.items()]
+    opts.append((CUSTOM, "custom…", "write your own role"))
+    choice = await pick(f"Role for {NAMES[agent]}", opts, current or "__mode__")
+    if choice is None:
+        return False
+    await _set_role(app, agent, "" if choice == "__mode__" else choice)
+    return True
+
+
+async def _set_role(app: "App", agent: str, key: str) -> None:
+    s = app.settings
+    text = ""
+    if key == CUSTOM:
+        text = await ask_text(f"{NAMES[agent]}'s role: ", getattr(s, f"{agent}_role_text") or role_for(s, agent)[1])
+        if text is None or not text.strip():
+            return
+        text = text.strip()
+        setattr(s, f"{agent}_role_text", text)
+    setattr(s, f"{agent}_role", key)
+    rkey, rtext = role_for(s, agent)
+    msg = f"{NAMES[agent]} → {role_name(rkey)}"
+    other = _other(agent)
+    if key and key in PARTNER and not getattr(s, f"{other}_role"):
+        # the partner was following the mode; give it a role that fits this one
+        setattr(s, f"{other}_role", PARTNER[key])
+        msg += f" · {NAMES[other]} → {role_name(PARTNER[key])} to pair with it (/role {other} … to change)"
+        if app.engine and app.engine.state["agents"][other].get("role_key") != PARTNER[key]:
+            app.engine.set_role(other, PARTNER[key], ROLES[PARTNER[key]].text)
+    if rkey in LEADS and s.first != agent and getattr(s, f"{_other(agent)}_role") not in LEADS:
+        s.first = agent
+        msg += f" ({NAMES[agent]} will open new conversations)"
+    if app.engine:
+        cur = app.engine.state["agents"][agent]
+        if cur.get("role") != rtext:
+            app.engine.set_role(agent, rkey, rtext)
+            msg += " — applies from the next turn; both agents will be told"
+    app.info(msg)
+
+
+def _role_args(app, done):
+    if not done:
+        return [*AGENTS, "swap"]
+    if len(done) == 1 and _agent_arg(done[0]):
+        return ["mode", *ROLES, CUSTOM]
+    return []
+
+
+@command("role", "Give an agent a role: orchestrator, architect, coder, reviewer, tester…",
+         "[agent] [role|mode|custom] · swap", args=_role_args)
+async def cmd_role(app: "App", args: list[str]) -> None:
+    s = app.settings
+    if args and args[0].lower() == "swap":
+        keys = {a: role_for(s, a) for a in AGENTS}
+        for a in AGENTS:
+            k, t = keys[_other(a)]
+            setattr(s, f"{a}_role", k)
+            if k == CUSTOM:
+                setattr(s, f"{a}_role_text", t)
+        if app.engine:
+            live = {a: (app.engine.state["agents"][a].get("role_key") or CUSTOM, app.engine.state["agents"][a]["role"])
+                    for a in AGENTS}
+            for a in AGENTS:
+                app.engine.set_role(a, *live[_other(a)])
+        app.info(f"Swapped roles → {assignment(app)}" + (" (from the next turn)" if app.engine else ""))
+        return
+    agent = _agent_arg(args[0]) if args else await _choose_agent_role(app)
+    if not agent:
+        if args:
+            app.warn("Usage: /role <claude|agy> <role>   ·   /role swap   ·   /roles to see them all")
+        return
+    if len(args) < 2:
+        await _choose_role(app, agent)
+        return
+    key = args[1].lower()
+    if key == "mode":
+        key = ""
+    elif key not in ROLES and key != CUSTOM:
+        close = [k for k in ROLES if k.startswith(key[:3])]
+        app.warn(f"Unknown role \"{key}\"." + (f" Did you mean {close[0]}?" if close else "") + " /roles lists them.")
+        return
+    await _set_role(app, agent, key)
+
+
+async def _choose_agent_role(app: "App") -> str | None:
+    opts = [(a, NAMES[a], f"now: {role_name(role_for(app.settings, a)[0])}") for a in AGENTS]
+    opts.append(("__swap__", "swap roles", assignment(app)))
+    choice = await pick("Change whose role?", opts)
+    if choice == "__swap__":
+        await cmd_role(app, ["swap"])
+        return None
+    return choice
+
+
+@command("roles", "Show who does what, and every available role")
 async def cmd_roles(app: "App", args: list[str]) -> None:
-    ra, rb = resolve_roles(app.settings)
-    first = app.settings.first
-    second = "agy" if first == "claude" else "claude"
-    new_a = await ask_text(f"Role for {NAMES[first]} (speaks first): ", ra)
-    if new_a is None:
-        return
-    new_b = await ask_text(f"Role for {NAMES[second]}: ", rb)
-    if new_b is None:
-        return
-    app.settings.preset = CUSTOM
-    app.settings.role_a, app.settings.role_b = new_a.strip(), new_b.strip()
-    app.info("Custom roles set." + (" Applies to new conversations (/new)." if app.engine else ""))
+    app.console.print(Text("New conversations: " + assignment(app) + f"  (mode {app.settings.preset}, "
+                           f"{NAMES[app.settings.first]} opens)", style="bold"))
+    if app.engine:
+        app.console.print(Text("This conversation: " + _live_roles(app), style="bold"))
+    t = Table(show_header=False, box=None, padding=(0, 2))
+    for k, r in ROLES.items():
+        t.add_row(Text(k, style="bold"), r.name, Text(r.summary, style="dim"))
+    t.add_row(Text(CUSTOM, style="bold"), "Custom", Text("write your own", style="dim"))
+    app.console.print(t)
+    app.console.print(Text("Assign with /role <claude|agy> <role>, e.g. /role agy orchestrator · /role swap",
+                           style="dim"))
 
 
 @command("turns", "Max turns (total for this conversation; default for new ones)", "[n]",
@@ -571,13 +693,11 @@ async def cmd_transcript(app: "App", args: list[str]) -> None:
 async def cmd_status(app: "App", args: list[str]) -> None:
     s = app.settings
     t = Table(show_header=False, box=None, padding=(0, 2))
-    ra, rb = resolve_roles(s)
-    first, second = s.first, "agy" if s.first == "claude" else "claude"
-    t.add_row("Claude", f"model {s.claude_model or 'default'} · effort {s.claude_effort or 'default'}")
-    t.add_row("Antigravity", f"model {s.agy_model or 'default'} · effort {s.agy_effort or 'default'}")
+    for a in AGENTS:
+        rk = role_for(s, a)[0]
+        t.add_row(NAMES[a], f"{role_name(rk)} · model {getattr(s, f'{a}_model') or 'default'} · "
+                            f"effort {getattr(s, f'{a}_effort') or 'default'}")
     t.add_row("Mode", s.preset)
-    t.add_row(f"  {NAMES[first]}", ra)
-    t.add_row(f"  {NAMES[second]}", rb)
     t.add_row("First", NAMES[s.first])
     t.add_row("Turns", str(s.turns))
     t.add_row("Perms", f"{s.perms} — {PERMS[s.perms]}")
@@ -598,7 +718,8 @@ async def cmd_status(app: "App", args: list[str]) -> None:
         t.add_row("  Workdir", st["workdir"])
         for a in AGENTS:
             ag = st["agents"][a]
-            t.add_row(f"  {NAMES[a]}", f"session {ag.get('session') or '—'} · tokens {ag.get('tokens', 0):,}")
+            t.add_row(f"  {NAMES[a]}", f"{role_name(ag.get('role_key') or CUSTOM)} · session "
+                                       f"{ag.get('session') or '—'} · tokens {ag.get('tokens', 0):,}")
         if st.get("last_verify"):
             lv = st["last_verify"]
             t.add_row("  Last verify", f"{'passed' if lv['ok'] else 'failed (exit ' + str(lv['code']) + ')'} "

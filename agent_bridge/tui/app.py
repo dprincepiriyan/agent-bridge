@@ -19,7 +19,8 @@ from rich.text import Text
 from .. import __version__, config
 from ..agents import make_adapters, missing_executables
 from ..config import Settings
-from ..engine import Engine, Event
+from ..engine import Engine, Event, role_for
+from ..roles import CUSTOM, role_name
 from ..presets import AGENTS, NAMES
 from ..notify import Notifier
 from ..render import COLORS, Renderer, make_console, tilde
@@ -125,6 +126,13 @@ class App:
 
         return kb
 
+    def _role_of(self, agent: str) -> str:
+        if self.engine:
+            key = self.engine.state["agents"][agent].get("role_key") or CUSTOM
+        else:
+            key = role_for(self.settings, agent)[0]
+        return key
+
     def _model_of(self, agent: str) -> str:
         if self.engine:
             m = self.engine.state["agents"][agent].get("model")
@@ -134,8 +142,8 @@ class App:
 
     def toolbar(self):
         sep = ("class:tb.sep", " │ ")
-        parts = [("", " "), ("class:tb.claude", f"claude:{self._model_of('claude')}"), sep,
-                 ("class:tb.agy", f"agy:{self._model_of('agy')}"), sep,
+        parts = [("", " "), ("class:tb.claude", f"claude:{self._model_of('claude')}·{self._role_of('claude')}"), sep,
+                 ("class:tb.agy", f"agy:{self._model_of('agy')}·{self._role_of('agy')}"), sep,
                  ("", self.settings.preset), sep, ("", f"perms:{self.engine.state['perms'] if self.engine else self.settings.perms}")]
         verify = self.engine.state.get("verify") if self.engine else self.settings.verify
         if verify:
@@ -236,8 +244,10 @@ class App:
         s = self.settings
         missing = missing_executables(self.adapters)
         body = Text.assemble(
-            ("Claude", f"bold {COLORS['claude']}"), f": {s.claude_model or 'default'}   ",
-            ("Antigravity", f"bold {COLORS['agy']}"), f": {s.agy_model or 'default'}\n",
+            ("Claude", f"bold {COLORS['claude']}"),
+            f": {role_name(role_for(s, 'claude')[0])} · {s.claude_model or 'default'}   ",
+            ("Antigravity", f"bold {COLORS['agy']}"),
+            f": {role_name(role_for(s, 'agy')[0])} · {s.agy_model or 'default'}\n",
             ("Mode", "bold"), f": {s.preset} · ", ("Turns", "bold"), f": {s.turns} · ",
             ("Perms", "bold"), f": {s.perms} · ", ("Dir", "bold"), f": {tilde(s.workdir) if s.workdir else 'per-run workspace'}",
             *((("\n", ""), ("Verify", "bold"), (f": {s.verify}", "")) if s.verify else ()),

@@ -10,18 +10,22 @@ from . import __version__, config, store
 from .agents import make_adapters, missing_executables
 from .engine import Engine
 from .presets import AGENTS, EFFORTS, MODES, PERMS
+from .roles import CUSTOM, LEADS, PARTNER, ROLES
 from .notify import Notifier
 from .render import Renderer, make_console, tilde
 
 EPILOG = """\
 Run with no arguments for the interactive app (type / for commands).
 
-modes:  build-review · plan · debate · brainstorm · custom (with --role-a/--role-b)
+modes:  build-review · orchestrated · design-build · build-test · secure-build · plan · debate · brainstorm
+roles:  orchestrator · architect · coder · reviewer · tester · debugger · security · designer · docs ·
+        devops · product · skeptic · advocate · critic · ideator · refiner · custom
 perms:  none (talk only) · edits (auto-accept file edits) · auto (edits + commands)
 
 examples:
   agent-bridge
   agent-bridge "Should a 3-person startup use microservices?" -P debate
+  agent-bridge "Build a ping pong game" --agy-role orchestrator --claude-role coder --perms auto
   agent-bridge "$(cat SPEC.md)" -P build-review --perms auto --workdir ~/projects/app -n 20 --verify "pytest -q"
   agent-bridge --resume ~/.local/share/agent-bridge/runs/20261121-120000 -n 12
 """
@@ -53,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-words", type=int)
     ap.add_argument("--stop-token")
     for a in AGENTS:
+        ap.add_argument(f"--{a}-role", choices=[*ROLES, CUSTOM], metavar="ROLE",
+                        help=f"{a}'s role: {', '.join(ROLES)} (default: from the mode)")
+        ap.add_argument(f"--{a}-role-text", metavar="TEXT", help=f"text for --{a}-role custom")
         ap.add_argument(f"--{a}-model")
         ap.add_argument(f"--{a}-effort", choices=EFFORTS)
     ap.add_argument("--resume", metavar="RUN_DIR", help="continue a saved run; -n sets the new total turn cap")
@@ -63,12 +70,20 @@ def build_parser() -> argparse.ArgumentParser:
 def apply_args(s: config.Settings, args: argparse.Namespace) -> None:
     for key in ("preset", "role_a", "role_b", "first", "turns", "perms", "workdir", "timeout", "retries",
                 "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort",
-                "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict", "notify"):
+                "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict", "notify",
+                "claude_role", "claude_role_text", "agy_role", "agy_role_text"):
         v = getattr(args, key, None)
         if v is not None:
             setattr(s, key, v)
     if (args.role_a or args.role_b) and args.preset is None:
         s.preset = "custom"
+    for a in AGENTS:
+        key = getattr(args, f"{a}_role", None)
+        if key in LEADS and args.first is None:  # orchestrator/architect/product opens
+            s.first = a
+        other = "agy" if a == "claude" else "claude"
+        if key in PARTNER and getattr(args, f"{other}_role", None) is None and not getattr(s, f"{other}_role"):
+            setattr(s, f"{other}_role", PARTNER[key])  # give the other agent a fitting role
 
 
 async def _headless(engine: Engine, console) -> str:

@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from .presets import AGENTS, EFFORTS, MODES, PERMS, STOP_DEFAULT
+from .roles import CUSTOM, ROLES
 
 
 def _xdg(var: str, default: str) -> Path:
@@ -37,8 +38,12 @@ def config_file() -> Path:
 @dataclass
 class Settings:
     preset: str = "build-review"
-    role_a: str = ""          # custom role for the first speaker (overrides preset)
-    role_b: str = ""          # custom role for the second speaker
+    role_a: str = ""          # legacy: custom role text for the first speaker
+    role_b: str = ""          # legacy: custom role text for the second speaker
+    claude_role: str = ""     # role key from the library, "custom", or "" = follow the mode
+    claude_role_text: str = ""  # text for claude_role = "custom"
+    agy_role: str = ""
+    agy_role_text: str = ""
     first: str = "claude"
     turns: int = 8
     perms: str = "none"
@@ -78,6 +83,8 @@ class Settings:
         if self.perms not in PERMS:
             reset("perms", "is not a permission level")
         for a in AGENTS:
+            if getattr(self, f"{a}_role") not in ("", CUSTOM, *ROLES):
+                reset(f"{a}_role", "is not a known role")
             if getattr(self, f"{a}_effort") not in ("",) + EFFORTS:
                 reset(f"{a}_effort", "is not an effort level")
         for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout", "notify_after"):
