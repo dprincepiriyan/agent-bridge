@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the automatic verdict when a debate ends")
     ap.add_argument("--no-notify", dest="notify", action="store_false", default=None,
                     help="no desktop notification when the run ends")
+    ap.add_argument("--no-progress", dest="progress", action="store_false", default=None,
+                    help="don't keep a shared PROGRESS.md (default: on when agents can edit files)")
+    ap.add_argument("--progress-every", type=int, metavar="N", help="show PROGRESS.md every N turns (default 4)")
+    ap.add_argument("--progress-keeper", choices=["auto", *AGENTS], help="who maintains PROGRESS.md")
     ap.add_argument("--retries", type=int)
     ap.add_argument("--max-words", type=int)
     ap.add_argument("--stop-token")
@@ -71,7 +75,8 @@ def apply_args(s: config.Settings, args: argparse.Namespace) -> None:
     for key in ("preset", "role_a", "role_b", "first", "turns", "perms", "workdir", "timeout", "retries",
                 "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort",
                 "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict", "notify",
-                "claude_role", "claude_role_text", "agy_role", "agy_role_text"):
+                "claude_role", "claude_role_text", "agy_role", "agy_role_text",
+                "progress", "progress_every", "progress_keeper"):
         v = getattr(args, key, None)
         if v is not None:
             setattr(s, key, v)
@@ -124,7 +129,7 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
                 if (v := getattr(args, f"{a}_{k}")) is not None:
                     st["agents"][a][k] = v
         for key in ("perms", "verify", "verify_timeout", "idle_timeout", "timeout", "judge",
-                    "checkpoints", "auto_verdict"):
+                    "checkpoints", "auto_verdict", "progress_every"):
             if (v := getattr(args, key, None)) is not None:
                 st[key] = v
     else:

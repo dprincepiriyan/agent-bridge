@@ -85,3 +85,10 @@ def test_single_role_gets_a_fitting_partner():
     s = Settings()
     apply_args(s, args)
     assert s.agy_role == "critic"
+
+
+def test_cli_progress_flags():
+    args = build_parser().parse_args(["x", "--no-progress", "--progress-every", "3", "--progress-keeper", "agy"])
+    s = Settings()
+    apply_args(s, args)
+    assert s.progress is False and s.progress_every == 3 and s.progress_keeper == "agy"

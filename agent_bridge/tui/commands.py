@@ -705,6 +705,8 @@ async def cmd_status(app: "App", args: list[str]) -> None:
     t.add_row("Verify", s.verify or "(none)")
     t.add_row("Checkpoints", "on" if s.checkpoints else "off")
     t.add_row("Judge", f"{NAMES[s.judge]} · auto verdict {'on' if s.auto_verdict else 'off'}")
+    t.add_row("Progress", f"{'on' if s.progress else 'off'} · every {s.progress_every} turns · keeper "
+                          f"{s.progress_keeper}" + ("" if s.perms != "none" else " (needs /perms edits or auto)"))
     t.add_row("Timeouts", f"{s.idle_timeout}s without output · {s.timeout}s per call")
     lim = app.adapters["claude"].limits
     if lim and lim.get("five_hour") is not None:
@@ -724,6 +726,9 @@ async def cmd_status(app: "App", args: list[str]) -> None:
             lv = st["last_verify"]
             t.add_row("  Last verify", f"{'passed' if lv['ok'] else 'failed (exit ' + str(lv['code']) + ')'} "
                                        f"at turn {lv['turn']}")
+        if st.get("progress"):
+            t.add_row("  Progress", f"PROGRESS.md kept by {NAMES.get(st.get('progress_keeper') or '', '—')} · "
+                                    f"last changed at turn {st.get('progress_hash_turn', 0)}")
         n_cp = len(st.get("checkpoint_log", []))
         if n_cp:
             t.add_row("  Checkpoints", f"{n_cp} commit(s) · /checkpoints to list · /undo to revert")
@@ -894,6 +899,91 @@ async def cmd_diff(app: "App", args: list[str]) -> None:
         return
     argv = pager.split() + (["-R"] if pager.split()[0] == "less" else [])
     await asyncio.to_thread(subprocess.run, argv, input=(f"{title}\n\n" + out).encode())
+
+
+def _progress_args(app, done):
+    if not done:
+        return ["on", "off", "every", "keeper"]
+    if done == ["every"]:
+        return ["2", "3", "4", "6", "8"]
+    if done == ["keeper"]:
+        return ["auto", *AGENTS]
+    return []
+
+
+@command("progress", "Shared PROGRESS.md memory: show it, or configure it",
+         "[on|off|every N|keeper claude|agy|auto]", args=_progress_args)
+async def cmd_progress(app: "App", args: list[str]) -> None:
+    from rich.markdown import Markdown
+    from ..engine import PROGRESS_FILE
+    from ..roles import progress_keeper
+    s, eng = app.settings, app.engine
+    sub = args[0].lower() if args else ""
+    if sub in ("on", "off"):
+        on = sub == "on"
+        s.progress = on
+        if eng:
+            if on and eng.state["perms"] == "none":
+                app.warn("This conversation is talk-only (/perms none), so the agents can't keep a file. "
+                         "Set /perms edits or auto first.")
+                return
+            eng.set(progress=on)
+            if on and not eng.state.get("progress_keeper"):
+                keys = {a: eng.state["agents"][a].get("role_key", "") for a in AGENTS}
+                eng.set(progress_keeper=progress_keeper(s.progress_keeper, keys, eng.state["next"]))
+        app.info(f"Progress memory → {sub}" + (" (created at the next run start)" if on and eng else ""))
+        return
+    if sub == "every":
+        try:
+            n = int(args[1])
+            assert n >= 1
+        except (IndexError, ValueError, AssertionError):
+            app.warn("Usage: /progress every <turns>")
+            return
+        s.progress_every = n
+        if eng:
+            eng.set(progress_every=n)
+        app.info(f"PROGRESS.md is shown to the speaking agent every {n} turn(s).")
+        return
+    if sub == "keeper":
+        who = args[1].lower() if len(args) > 1 else ""
+        if who not in ("auto", *AGENTS):
+            app.warn("Usage: /progress keeper <claude|agy|auto>")
+            return
+        s.progress_keeper = who
+        if eng:
+            keys = {a: eng.state["agents"][a].get("role_key", "") for a in AGENTS}
+            new = progress_keeper(who, keys, eng.state["next"])
+            if new != eng.state.get("progress_keeper"):
+                eng.set(progress_keeper=new)
+                eng.add_note(f"The user made you the keeper of {PROGRESS_FILE}: keep it up to date from now on.",
+                             to=new)
+                eng.add_note(f"{NAMES[new]} now keeps {PROGRESS_FILE}.", to=_other(new))
+        app.info(f"PROGRESS.md keeper → {who}")
+        return
+    if sub:
+        app.warn("Usage: /progress [on|off|every N|keeper claude|agy|auto]")
+        return
+    # show it
+    if not eng:
+        state = "on" if s.progress else "off"
+        app.info(f"Progress memory: {state} · shown every {s.progress_every} turns · keeper {s.progress_keeper}\n"
+                 "  It's created when a conversation with file permissions (/perms edits or auto) starts.")
+        return
+    st = eng.state
+    if not st.get("progress"):
+        app.info("Progress memory is off for this conversation." + (
+            " It needs file permissions (/perms edits or auto)." if st["perms"] == "none" else " /progress on"))
+        return
+    text = eng._progress_text()
+    keeper = NAMES.get(st.get("progress_keeper") or "", "—")
+    meta = (f"{PROGRESS_FILE} · kept by {keeper} · shown every {st.get('progress_every', 4)} turns · "
+            f"last changed at turn {st.get('progress_hash_turn', 0)}")
+    if text is None:
+        app.warn(f"{eng.progress_path} doesn't exist yet (it's created when the run starts).")
+        return
+    app.console.print(Text(meta, style="dim"))
+    app.console.print(Markdown(text))
 
 
 @command("summary", "Write a verdict (debates) or summary of this conversation", "[claude|agy]",

@@ -365,3 +365,28 @@ def test_role_commands(monkeypatch):
     assert app.engine.state["agents"]["claude"]["role_key"] == "orchestrator"
     notes = app.engine.state["pending_notes"]
     assert {n["to"] for n in notes} == {"agy", "claude"}
+
+
+def test_progress_command(monkeypatch):
+    async def script(app, inp):
+        inp.send_text("/progress\r")  # no conversation yet → info only
+        inp.send_text("/perms edits\r")
+        await wait_for(lambda: app.settings.perms == "edits")
+        inp.send_text("/progress every 2\r")
+        await wait_for(lambda: app.settings.progress_every == 2)
+        inp.send_text("/turns 3\r")
+        inp.send_text("build it\r")
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running())
+        inp.send_text("/progress\r")
+        inp.send_text("/progress keeper agy\r")
+        await wait_for(lambda: app.engine.state["progress_keeper"] == "agy")
+        inp.send_text("/progress off\r")
+        await wait_for(lambda: app.engine.state["progress"] is False)
+        inp.send_text("/progress bogus\r")
+        await asyncio.sleep(0.3)
+
+    app = run_script(monkeypatch, script)
+    assert app.engine.progress_path.exists()
+    notes = {n["to"]: n["text"] for n in app.engine.state["pending_notes"]}
+    assert "keeper of PROGRESS.md" in notes["agy"] and "Antigravity now keeps" in notes["claude"]
