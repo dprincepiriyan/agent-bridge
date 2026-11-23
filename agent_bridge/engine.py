@@ -17,7 +17,7 @@ from . import store, workspace
 from .agents.base import Adapter, AgentError, ConfigError, TurnContext, TurnResult, UsageLimitError
 from .config import Settings
 from .presets import AGENTS, NAMES
-from .roles import CUSTOM, ROLES, TEAMS, role_name
+from .roles import CUSTOM, ROLES, TEAMS, progress_keeper, role_name
 
 
 @dataclass
@@ -119,6 +119,8 @@ def new_state(s: Settings, topic: str) -> dict:
         "idle_timeout": s.idle_timeout, "verify": s.verify, "verify_timeout": s.verify_timeout,
         "checkpoints": s.checkpoints, "own_workspace": not s.workdir, "judge": s.judge,
         "auto_verdict": s.auto_verdict,
+        "progress": s.progress and s.perms != "none", "progress_every": s.progress_every,
+        "progress_keeper": progress_keeper(s.progress_keeper, {a: agents[a]["role_key"] for a in AGENTS}, first),
     }
     store.upgrade(state)
     store.save_state(state)

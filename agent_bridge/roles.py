@@ -128,3 +128,11 @@ LEADS = {"orchestrator", "architect", "product"}
 
 def role_name(key: str) -> str:
     return ROLES[key].name if key in ROLES else ("Custom" if key == CUSTOM else key)
+
+
+def progress_keeper(choice: str, role_keys: dict[str, str], first: str) -> str:
+    """Who maintains PROGRESS.md: an explicit agent, else the lead role, else the first speaker."""
+    if choice in role_keys:
+        return choice
+    leads = [a for a, k in role_keys.items() if k in LEADS]
+    return leads[0] if len(leads) == 1 else first

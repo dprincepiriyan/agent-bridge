@@ -46,6 +46,9 @@ V3_DEFAULTS = {
     "pending_notes": [], "idle_timeout": 600, "verify": "", "verify_timeout": 900, "checkpoints": True,
     "checkpoint_ok": None, "checkpoint_log": [], "own_workspace": False, "judge": "claude",
     "auto_verdict": True, "last_verify": None, "interrupted": None,
+    # shared progress memory; off for runs created before it existed
+    "progress": False, "progress_every": 4, "progress_keeper": "auto", "progress_last_shown": None,
+    "progress_hash": None, "progress_hash_turn": 0,
 }
 
 

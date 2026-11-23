@@ -64,6 +64,9 @@ class Settings:
     auto_verdict: bool = True  # write a verdict automatically when a debate ends
     notify: bool = True       # desktop notification when a run ends on its own
     notify_after: int = 30    # ...but only if it ran at least this many seconds
+    progress: bool = True     # shared PROGRESS.md memory (needs file permissions: edits/auto)
+    progress_every: int = 4   # show it to the speaking agent every N turns
+    progress_keeper: str = "auto"  # who maintains it: auto (lead role / first speaker), claude, agy
 
     def validate(self) -> list[str]:
         """Fix invalid values in place; return warnings."""
@@ -80,6 +83,8 @@ class Settings:
             reset("first", "must be claude or agy")
         if self.judge not in AGENTS:
             reset("judge", "must be claude or agy")
+        if self.progress_keeper not in ("auto", *AGENTS):
+            reset("progress_keeper", "must be auto, claude or agy")
         if self.perms not in PERMS:
             reset("perms", "is not a permission level")
         for a in AGENTS:
@@ -87,7 +92,8 @@ class Settings:
                 reset(f"{a}_role", "is not a known role")
             if getattr(self, f"{a}_effort") not in ("",) + EFFORTS:
                 reset(f"{a}_effort", "is not an effort level")
-        for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout", "notify_after"):
+        for name in ("turns", "timeout", "idle_timeout", "max_words", "verify_timeout", "notify_after",
+                     "progress_every"):
             if not isinstance(getattr(self, name), int) or getattr(self, name) < 1:
                 reset(name, "must be a positive integer")
         if not isinstance(self.retries, int) or self.retries < 0:
