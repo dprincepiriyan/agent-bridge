@@ -126,3 +126,8 @@ Deviation: `install.sh` falls back to a private virtual environment when `uv` is
 - [x] `/role` (picker, direct, swap, live changes announced to both agents), `/roles`, `/mode` as team presets,
       `--claude-role` / `--agy-role`, a "who does what" step in `/init`.
 - [x] Briefings include the partner's role; lead roles open; single assignments get a fitting partner role.
+
+## v0.7.0
+
+- [x] Shared progress memory: seeded `PROGRESS.md`, a keeper (lead role or first speaker), shown every N turns
+      and on resume, nudges when missing/stale, included in `/summary`; `/progress` and CLI flags.

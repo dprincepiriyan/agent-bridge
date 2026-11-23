@@ -31,7 +31,7 @@ With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns 
 
 ```
 $ agent-bridge
-╭─ agent-bridge v0.6.0 ──────────────────────────────────────────────╮
+╭─ agent-bridge v0.7.0 ──────────────────────────────────────────────╮
 │ Claude: default   Antigravity: gemini-3.8-flash-low                │
 │ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
 ╰────────────────────────────────────────────────────────────────────╯
@@ -67,6 +67,7 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/checkpoints [on\|off]` | Git-commit the workdir after every turn; with no argument, list the commits |
 | `/diff [turn\|all]` | Show the code changes of the latest turn, a given turn, or the whole conversation |
 | `/undo [turn]` | Revert the file changes of the last (or a given) turn; the agents are told |
+| `/progress [on\|off\|every N\|keeper …]` | Show the shared `PROGRESS.md`, or configure how often it's shown and who keeps it |
 | `/summary [agent]` | Verdict (debates) or summary of the conversation, saved to `summary.md` |
 | `/judge [agent\|auto on\|auto off]` | Who judges, and whether debates get a verdict automatically |
 | `/pause` · `/stop` · `/continue [n]` | Pause after this turn · interrupt now · run more turns |
@@ -130,6 +131,7 @@ abr "Build a ping pong game" --agy-role orchestrator --claude-role coder --perms
 - **Git checkpoints.** After every turn that changed files, the workdir is committed as `agent-bridge: turn N · Claude`, so `git log` shows who changed what. `/undo` reverts a turn with a revert commit (nothing is deleted) and tells the agents. Per-run workspaces get their own repo automatically. In your own project, checkpoints only start if the repo is clean, so your uncommitted work is never swept into an agent commit. Turn them off with `/checkpoints off` or `--no-checkpoints`.
 - **Stuck detection.** An agent is stopped after 10 minutes without any output (`--idle-timeout`) or 60 minutes in total (`--timeout`), then retried.
 - **Usage limits.** When Claude or Antigravity reports a usage limit, the run pauses immediately with the reset time, without wasting retries. `/continue` picks up exactly there. The status bar shows Claude's 5-hour window usage.
+- **Shared progress memory.** In runs where agents can edit files, the bridge creates `PROGRESS.md` (Goal, Done, In progress, Next, Decisions, Open issues). One agent keeps it updated: the lead role (orchestrator, architect or product manager), otherwise the first speaker. Every 4 turns, and whenever a run resumes, the bridge shows the current file to the agent about to speak, so the plan survives the CLIs compressing their own history. The keeper is nudged if the file goes missing or stale. `/summary` reads it too. Configure it with `/progress every 2`, `/progress keeper claude` or `/progress off` (`--no-progress`).
 - **Notifications.** When a run that took more than 30 seconds ends on its own (agreed, turn limit, verification failed, usage limit, error), you get a desktop notification via `notify-send`, so you can walk away from long builds. Your own Esc or `/pause` never notifies. Use `/notify off` or `--no-notify` to turn them off.
 - **Visible work.** Tool steps name their target ("⚙ Edit src/Bank.java", "⚙ Run mvn -q test"), and `/diff` shows each turn's code changes from its checkpoint.
 - **Verdicts.** When a debate ends, a fresh judge call (Claude by default; `/judge agy` to switch) reads the transcript and writes a verdict: winner, strongest arguments, common ground and weak spots. `/summary` works for any conversation, at any time.
