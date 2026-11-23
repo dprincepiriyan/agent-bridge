@@ -64,7 +64,7 @@ def is_debate(state: dict) -> bool:
 
 
 def briefing(me: str, topic: str, role: str, stop: str, perms: str, max_words: int, verify: str = "",
-             role_title: str = "", partner_role: str = "", partner_title: str = "") -> str:
+             role_title: str = "", partner_role: str = "", partner_title: str = "", progress: str = "") -> str:
     other = other_of(me)
     tools = ("Do NOT use any tools; just think and write." if perms == "none" else
              "You may read/edit files in the current working directory (shared with your partner) when useful"
@@ -87,7 +87,7 @@ RULES:
 - {tools}
 - When the task is genuinely complete and you both agree, end your message with the
   token {stop} on its own line. If your partner sent {stop} but you disagree, say why
-  and do NOT include the token.{check}
+  and do NOT include the token.{check}{progress}
 """
 
 
@@ -132,6 +132,33 @@ def new_state(s: Settings, topic: str) -> dict:
     return state
 
 
+PROGRESS_FILE = "PROGRESS.md"
+PROGRESS_MAX_CHARS = 5000
+
+
+def progress_template(topic: str) -> str:
+    goal = " ".join(topic.strip().split())
+    goal = goal if len(goal) <= 300 else goal[:299] + "…"
+    return f"""# Progress
+
+Shared memory for this task. Keep it short and current; it is shown to both agents regularly.
+
+## Goal
+{goal}
+
+## Done
+- (nothing yet)
+
+## In progress
+
+## Next
+
+## Decisions
+
+## Open issues
+"""
+
+
 VERDICT_PROMPT = """You are an impartial judge. You did not take part in the debate below between Claude and
 Antigravity. Judge only the quality of the arguments: evidence, logic, and how well each side
 answered the other — not which position you personally prefer.
@@ -170,6 +197,8 @@ class Engine:
         self._pause = False
         self._in_turn = False
         self._turn_cut = False
+        self._progress_resume = False
+        self._progress_shown = False
 
     @classmethod
     def new(cls, s: Settings, topic: str, adapters, emit=None) -> "Engine":
@@ -256,6 +285,86 @@ class Engine:
         self.state.update(kw)
         self.save()
 
+    # ---- shared progress memory -----------------------------------------------
+    @property
+    def progress_path(self) -> Path:
+        return self.workdir / PROGRESS_FILE
+
+    def _progress_text(self) -> str | None:
+        try:
+            return self.progress_path.read_text()
+        except OSError:
+            return None
+
+    def _progress_rule(self, me: str) -> str:
+        s = self.state
+        if not s.get("progress"):
+            return ""
+        keeper = s.get("progress_keeper") or s["next"]
+        if me == keeper:
+            return (f"\n- You keep {PROGRESS_FILE} (in the working directory) up to date: whenever something "
+                    f"changes, update Done / In progress / Next / Decisions / Open issues. It is the shared "
+                    f"memory for this task and is shown to both of you regularly, so keep it short (~60 lines) "
+                    f"and accurate.")
+        return (f"\n- {PROGRESS_FILE} in the working directory is the shared plan, kept by {NAMES[keeper]}. "
+                f"Read it when you start and tell {NAMES[keeper]} if something in it is wrong or missing.")
+
+    def _seed_progress(self) -> None:
+        s = self.state
+        if s.get("progress") and not self.progress_path.exists():
+            try:
+                self.progress_path.write_text(progress_template(s["topic"]))
+            except OSError as e:
+                self.emit(Event("notice", text=f"Couldn't create {PROGRESS_FILE}: {e}"))
+                return
+            s["progress_last_shown"] = s["turn"]
+            s["progress_hash"] = hash(self.progress_path.read_text())
+            s["progress_hash_turn"] = s["turn"]
+            self.emit(Event("notice", text=f"Created {PROGRESS_FILE} (shared memory, kept by "
+                                           f"{NAMES[s.get('progress_keeper') or s['next']]})."))
+
+    def _progress_note(self, me: str) -> tuple[str, bool]:
+        """(text to add to this prompt, whether the file content is being shown)."""
+        s = self.state
+        if not s.get("progress"):
+            return "", False
+        keeper = s.get("progress_keeper") or s["next"]
+        text = self._progress_text()
+        if text is None:
+            if me == keeper and s["turn"] > 0:
+                return (f"The bridge reports:\n{PROGRESS_FILE} is missing from the working directory. Recreate "
+                        f"it (Goal / Done / In progress / Next / Decisions / Open issues) and keep it current.\n\n",
+                        False)
+            return "", False
+        out = ""
+        last = s.get("progress_last_shown")
+        due = self._progress_resume or last is None or s["turn"] - last >= max(1, s.get("progress_every", 4))
+        shown = False
+        if due and s["turn"] > 0:
+            body = text if len(text) <= PROGRESS_MAX_CHARS else (
+                text[:PROGRESS_MAX_CHARS] + f"\n… (truncated; it's {len(text)} characters, please trim it)")
+            why = "You're resuming after a pause" if self._progress_resume else "Reminder"
+            out += (f"The bridge reports:\n{why} — current {PROGRESS_FILE} (kept by {NAMES[keeper]}):\n"
+                    f"```markdown\n{body.strip()}\n```\n\n")
+            shown = True
+        stale = s["turn"] - (s.get("progress_hash_turn") or 0)
+        if me == keeper and s["turn"] > 0 and stale >= 2 * max(1, s.get("progress_every", 4)):
+            out += (f"The bridge reports:\n{PROGRESS_FILE} hasn't changed in {stale} turns. Update it if anything "
+                    f"moved (done items, next steps, decisions, open issues).\n\n")
+        return out, shown
+
+    def _after_turn_progress(self, shown: bool) -> None:
+        s = self.state
+        if not s.get("progress"):
+            return
+        if shown:
+            s["progress_last_shown"] = s["turn"] - 1  # the turn index it was shown on (turn was just incremented)
+            self._progress_resume = False
+        text = self._progress_text()
+        h = hash(text) if text is not None else None
+        if h != s.get("progress_hash"):
+            s["progress_hash"], s["progress_hash_turn"] = h, s["turn"]
+
     # ---- prompts ----------------------------------------------------------
     def _prompt(self, me: str) -> tuple[str, str]:
         s = self.state
@@ -264,13 +373,16 @@ class Engine:
         p = s["agents"][other]
         brief = briefing(me, s["topic"], a["role"], s["stop"], s["perms"], s["max_words"], s.get("verify", ""),
                          role_name(a.get("role_key", "")) if a.get("role_key") else "", p.get("role", ""),
-                         role_name(p.get("role_key", "")) if p.get("role_key") else "")
+                         role_name(p.get("role_key", "")) if p.get("role_key") else "",
+                         self._progress_rule(me))
         notes = ""
         intr = s.get("interrupted")
         if intr and intr.get("agent") == me and a["started"]:
             notes += ("(Your previous turn was interrupted before you finished, so the message below is being "
                       "re-sent. If you already see it above, answer it once — don't treat it as a new request.)\n\n")
         notes += "".join(f"The bridge reports:\n{n['text']}\n\n" for n in self._notes_for(me))
+        progress_note, self._progress_shown = self._progress_note(me)
+        notes += progress_note
         notes += "".join(f"The user says:\n{m}\n\n" for m in s["pending_user"])
         last = s["last_msg"]
         if not a["started"]:
@@ -345,6 +457,7 @@ class Engine:
         s["last_msg"], s["last_speaker"] = reply, me
         s["interrupted"] = None
         s["turn"] += 1
+        self._after_turn_progress(self._progress_shown)
         s["next"] = other_of(me)
         self.save()
         return me, reply
@@ -457,8 +570,11 @@ class Engine:
                           + transcript[-(MAX_TRANSCRIPT - 8000):])
         debate = is_debate(s)
         title = "Verdict" if debate else "Summary"
+        prog = self._progress_text() if (s.get("progress") and not debate) else None
         prompt = (f"{VERDICT_PROMPT if debate else SUMMARY_PROMPT}\n\nTOPIC:\n{s['topic']}\n\n"
-                  f"TRANSCRIPT:\n<transcript>\n{transcript}\n</transcript>")
+                  + (f"{PROGRESS_FILE} (the agents' shared progress file):\n<progress>\n"
+                     f"{prog[:PROGRESS_MAX_CHARS]}\n</progress>\n\n" if prog else "")
+                  + f"TRANSCRIPT:\n<transcript>\n{transcript}\n</transcript>")
         src = s["agents"][judge]
         agent = {"started": False, "session": None, "model": src.get("model", ""), "effort": src.get("effort", "")}
         self.emit(Event("summary_start", judge, title))
@@ -491,6 +607,8 @@ class Engine:
         reason, detail = "limit", {}
         try:
             await self._prepare_checkpoints()
+            self._seed_progress()  # after the clean-repo check, so the seed can't disable checkpoints
+            self._progress_resume = s["turn"] > 0  # re-show the plan when a run continues
             while s["turn"] < s["max_turns"]:
                 if self._pause:
                     reason = "paused"
