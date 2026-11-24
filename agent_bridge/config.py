@@ -104,15 +104,17 @@ class Settings:
 
 
 def load() -> tuple[Settings, list[str]]:
+    from .roles import load_user_roles
+    role_warn = load_user_roles()  # before validation, so saved settings may name your own roles
     s = Settings()
     path = config_file()
     if not path.exists():
-        return s, []
+        return s, role_warn
     try:
         data = tomllib.loads(path.read_text())
     except (tomllib.TOMLDecodeError, OSError) as e:
-        return s, [f"config: could not read {path}: {e}; using defaults"]
-    warn = []
+        return s, role_warn + [f"config: could not read {path}: {e}; using defaults"]
+    warn = list(role_warn)
     types = {f.name: f.type for f in fields(Settings)}
     for k, v in data.items():
         if k not in types:

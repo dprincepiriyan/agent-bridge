@@ -10,3 +10,13 @@ def isolated_dirs(tmp_path, monkeypatch):
     from agent_bridge import store
     monkeypatch.setattr(store, "legacy_dirs", lambda: [])
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def reset_user_roles():
+    yield
+    from agent_bridge.roles import BUILTIN_ROLES, ROLES, USER_ROLES
+    for k in list(USER_ROLES):
+        ROLES.pop(k, None)
+    USER_ROLES.clear()
+    ROLES.update(BUILTIN_ROLES)

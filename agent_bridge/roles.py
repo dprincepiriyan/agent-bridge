@@ -94,6 +94,8 @@ ROLES: dict[str, Role] = {
 }
 
 CUSTOM = "custom"
+BUILTIN_ROLES = dict(ROLES)
+USER_ROLES: set[str] = set()  # keys loaded from ~/.config/agent-bridge/roles/*.md
 
 
 @dataclass(frozen=True)
@@ -136,3 +138,86 @@ def progress_keeper(choice: str, role_keys: dict[str, str], first: str) -> str:
         return choice
     leads = [a for a, k in role_keys.items() if k in LEADS]
     return leads[0] if len(leads) == 1 else first
+
+
+# ------------------------------------------------------------------ user roles
+ROLE_KEY_RE = r"^[a-z0-9][a-z0-9_-]{0,39}$"
+ROLE_TEMPLATE = """---
+name: {name}
+summary: {summary}
+---
+{text}
+"""
+
+
+def roles_dir():
+    from . import config  # lazy: config imports this module
+    return config.config_dir() / "roles"
+
+
+def parse_role_file(key: str, raw: str) -> Role | None:
+    """Markdown with optional '---' frontmatter (name, summary) or a '# Name' heading; body = instructions."""
+    import re
+    name = summary = ""
+    body = raw.replace("\r\n", "\n")
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        if end != -1:
+            for line in body[3:end].splitlines():
+                k, _, v = line.partition(":")
+                if k.strip().lower() == "name":
+                    name = v.strip()
+                elif k.strip().lower() == "summary":
+                    summary = v.strip()
+            body = body[end + 4:]
+    lines = body.strip().splitlines()
+    if lines and lines[0].startswith("# "):
+        name = name or lines[0][2:].strip()
+        lines = lines[1:]
+    text = "\n".join(lines).strip()
+    if not text:
+        return None
+    name = name or key.replace("-", " ").replace("_", " ").title()
+    if not summary:
+        first = re.split(r"(?<=[.!?])\s", " ".join(text.split()), maxsplit=1)[0]
+        summary = first if len(first) <= 80 else first[:79] + "…"
+    return Role(name, summary, text)
+
+
+def load_user_roles() -> list[str]:
+    """(Re)load role files into ROLES. Returns warnings."""
+    import re
+    for k in list(USER_ROLES):
+        ROLES.pop(k, None)
+    USER_ROLES.clear()
+    ROLES.update(BUILTIN_ROLES)
+    d = roles_dir()
+    if not d.is_dir():
+        return []
+    warn = []
+    for f in sorted(d.glob("*.md")):
+        key = f.stem.lower()
+        if not re.match(ROLE_KEY_RE, key) or key == CUSTOM:
+            warn.append(f"roles: {f.name} skipped — use a name like game-dev.md (lowercase, digits, - or _)")
+            continue
+        try:
+            role = parse_role_file(key, f.read_text())
+        except OSError as e:
+            warn.append(f"roles: can't read {f.name}: {e}")
+            continue
+        if role is None:
+            warn.append(f"roles: {f.name} has no instructions; skipped")
+            continue
+        if key in BUILTIN_ROLES:
+            warn.append(f"roles: {f.name} replaces the built-in '{key}' role")
+        ROLES[key] = role
+        USER_ROLES.add(key)
+    return warn
+
+
+def save_user_role(key: str, name: str, summary: str, text: str):
+    d = roles_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{key}.md"
+    path.write_text(ROLE_TEMPLATE.format(name=name.strip(), summary=summary.strip(), text=text.strip()))
+    return path
