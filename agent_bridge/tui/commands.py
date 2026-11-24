@@ -16,10 +16,12 @@ from rich.text import Text
 
 from .. import config, store
 from ..config import Settings
+from ..render import tilde
 from ..engine import Engine, resolve_roles, role_for
 from ..agents.models import match_models
 from ..presets import AGENTS, EFFORTS, MODES, NAMES, PERMS
-from ..roles import CUSTOM, LEADS, PARTNER, ROLES, TEAMS, role_name
+from ..roles import (BUILTIN_ROLES, CUSTOM, LEADS, PARTNER, ROLE_KEY_RE, ROLES, TEAMS, USER_ROLES,
+                     load_user_roles, role_name, roles_dir, save_user_role)
 from .pickers import ask_text, confirm, pick
 
 if TYPE_CHECKING:
@@ -294,11 +296,15 @@ async def _choose_role(app: "App", agent: str) -> bool:
     current = getattr(s, f"{agent}_role")
     follow_key = role_for(Settings(**{**s.__dict__, f"{agent}_role": ""}), agent)[0]
     opts = [("__mode__", "follow the mode", f"{s.preset} gives {NAMES[agent]}: {role_name(follow_key)}")]
-    opts += [(k, r.name, r.summary) for k, r in ROLES.items()]
-    opts.append((CUSTOM, "custom…", "write your own role"))
+    opts += [(k, r.name + ("  ★" if k in USER_ROLES else ""), r.summary) for k, r in ROLES.items()]
+    opts.append((CUSTOM, "custom…", "one-off text for this conversation"))
+    opts.append(("__create__", "＋ create a reusable role…", f"saved in {tilde(roles_dir())}"))
     choice = await pick(f"Role for {NAMES[agent]}", opts, current or "__mode__")
     if choice is None:
         return False
+    if choice == "__create__":
+        await _create_role(app)
+        return True
     await _set_role(app, agent, "" if choice == "__mode__" else choice)
     return True
 
@@ -335,16 +341,25 @@ async def _set_role(app: "App", agent: str, key: str) -> None:
 
 def _role_args(app, done):
     if not done:
-        return [*AGENTS, "swap"]
+        return [*AGENTS, "swap", "create", "reload"]
     if len(done) == 1 and _agent_arg(done[0]):
         return ["mode", *ROLES, CUSTOM]
     return []
 
 
 @command("role", "Give an agent a role: orchestrator, architect, coder, reviewer, tester…",
-         "[agent] [role|mode|custom] · swap", args=_role_args)
+         "[agent] [role|mode|custom] · swap · create · reload", args=_role_args)
 async def cmd_role(app: "App", args: list[str]) -> None:
     s = app.settings
+    if args and args[0].lower() in ("create", "new"):
+        await _create_role(app, args[1] if len(args) > 1 else "")
+        return
+    if args and args[0].lower() == "reload":
+        warn = load_user_roles()
+        for w in warn:
+            app.warn(w)
+        app.info(f"Loaded {len(USER_ROLES)} role(s) of your own from {tilde(roles_dir())}")
+        return
     if args and args[0].lower() == "swap":
         keys = {a: role_for(s, a) for a in AGENTS}
         for a in AGENTS:
@@ -377,6 +392,41 @@ async def cmd_role(app: "App", args: list[str]) -> None:
     await _set_role(app, agent, key)
 
 
+async def _create_role(app: "App", key: str = "") -> None:
+    import re
+    say = app.info
+    say(f"New role — saved as a Markdown file in {tilde(roles_dir())} (edit it any time). Esc cancels.")
+    key = (key or await ask_text("Role id (e.g. game-dev): ") or "").strip().lower()
+    if not key:
+        return
+    if not re.match(ROLE_KEY_RE, key) or key in (CUSTOM, "create", "new", "reload", "swap", "mode"):
+        app.warn("Use lowercase letters, digits, '-' or '_' (e.g. game-dev).")
+        return
+    path = roles_dir() / f"{key}.md"
+    if path.exists() and not await confirm(f"{tilde(path)} exists. Overwrite it?"):
+        return
+    if key in BUILTIN_ROLES and not path.exists() and not await confirm(
+            f"'{key}' is a built-in role. Replace it with yours?"):
+        return
+    name = await ask_text("Display name: ", key.replace("-", " ").replace("_", " ").title())
+    if name is None:
+        return
+    summary = await ask_text("One-line summary: ")
+    if summary is None:
+        return
+    text = await ask_text("Instructions (what this role does and how; one paragraph is fine): ")
+    if not text or not text.strip():
+        app.warn("A role needs instructions.")
+        return
+    path = save_user_role(key, name or key, summary or "", text)
+    for w in load_user_roles():
+        app.warn(w)
+    say(f"Saved {tilde(path)} → /role claude {key}  or  /role agy {key}")
+    who = await pick("Give it to an agent now?", [(a, NAMES[a], "") for a in AGENTS] + [("", "not now", "")])
+    if who:
+        await _set_role(app, who, key)
+
+
 async def _choose_agent_role(app: "App") -> str | None:
     opts = [(a, NAMES[a], f"now: {role_name(role_for(app.settings, a)[0])}") for a in AGENTS]
     opts.append(("__swap__", "swap roles", assignment(app)))
@@ -395,11 +445,13 @@ async def cmd_roles(app: "App", args: list[str]) -> None:
         app.console.print(Text("This conversation: " + _live_roles(app), style="bold"))
     t = Table(show_header=False, box=None, padding=(0, 2))
     for k, r in ROLES.items():
-        t.add_row(Text(k, style="bold"), r.name, Text(r.summary, style="dim"))
-    t.add_row(Text(CUSTOM, style="bold"), "Custom", Text("write your own", style="dim"))
+        mine = k in USER_ROLES
+        t.add_row(Text(k, style="bold green" if mine else "bold"), r.name + ("  (yours)" if mine else ""),
+                  Text(r.summary, style="dim"))
+    t.add_row(Text(CUSTOM, style="bold"), "Custom", Text("one-off text for one conversation", style="dim"))
     app.console.print(t)
-    app.console.print(Text("Assign with /role <claude|agy> <role>, e.g. /role agy orchestrator · /role swap",
-                           style="dim"))
+    app.console.print(Text("Assign with /role <claude|agy> <role> · /role swap · /role create to add your own "
+                           f"(files in {tilde(roles_dir())}) · /role reload after editing them", style="dim"))
 
 
 @command("turns", "Max turns (total for this conversation; default for new ones)", "[n]",

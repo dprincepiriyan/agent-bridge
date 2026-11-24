@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--stop-token")
     for a in AGENTS:
         ap.add_argument(f"--{a}-role", choices=[*ROLES, CUSTOM], metavar="ROLE",
-                        help=f"{a}'s role: {', '.join(ROLES)} (default: from the mode)")
+                        help=f"{a}'s role: built-in or one of yours (default: from the mode)")
         ap.add_argument(f"--{a}-role-text", metavar="TEXT", help=f"text for --{a}-role custom")
         ap.add_argument(f"--{a}-model")
         ap.add_argument(f"--{a}-effort", choices=EFFORTS)
@@ -156,6 +156,8 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .roles import load_user_roles
+    load_user_roles()  # so --claude-role/--agy-role accept your own roles (warnings come from config.load)
     args = build_parser().parse_args(argv)
     s, warnings = config.load()
     apply_args(s, args)

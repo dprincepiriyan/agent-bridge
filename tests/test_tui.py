@@ -390,3 +390,26 @@ def test_progress_command(monkeypatch):
     assert app.engine.progress_path.exists()
     notes = {n["to"]: n["text"] for n in app.engine.state["pending_notes"]}
     assert "keeper of PROGRESS.md" in notes["agy"] and "Antigravity now keeps" in notes["claude"]
+
+
+def test_role_create_and_assign(monkeypatch):
+    from agent_bridge.roles import ROLES, USER_ROLES, roles_dir
+
+    async def script(app, inp):
+        inp.send_text("/role create\r")
+        await asyncio.sleep(0.3)
+        for answer in ("game-dev", "\r", "Pygame, 60 fps", "Build games with Pygame; keep 60 fps."):
+            inp.send_text(answer if answer == "\r" else answer + "\r")
+            await asyncio.sleep(0.25)
+        await wait_for(lambda: "game-dev" in ROLES)
+        inp.send_text("1")  # give it to Claude
+        await wait_for(lambda: app.settings.claude_role == "game-dev")
+        inp.send_text("/roles\r")
+        (roles_dir() / "game-dev.md").write_text("---\nname: Game dev v2\n---\nNew text.")
+        inp.send_text("/role reload\r")
+        await wait_for(lambda: ROLES["game-dev"].name == "Game dev v2")
+
+    app = run_script(monkeypatch, script)
+    assert "game-dev" in USER_ROLES
+    text = (roles_dir() / "game-dev.md").read_text()
+    assert text.startswith("---\nname: Game dev v2")

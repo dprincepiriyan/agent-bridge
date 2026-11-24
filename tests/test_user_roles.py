@@ -49,3 +49,12 @@ def test_config_load_knows_user_roles():
     config.config_file().write_text('claude_role = "game-dev"\n')
     s, warn = config.load()
     assert s.claude_role == "game-dev" and warn == []
+
+
+def test_cli_accepts_user_roles(monkeypatch):
+    write("game-dev.md", "Build games.")
+    import agent_bridge.cli as cli
+    seen = {}
+    monkeypatch.setattr(cli, "run_headless", lambda s, args: seen.update(s=s) or 0)
+    assert cli.main(["make pong", "--claude-role", "game-dev"]) == 0
+    assert seen["s"].claude_role == "game-dev" and seen["s"].agy_role == ""  # no partner mapping for unknown roles
