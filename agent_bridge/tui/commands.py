@@ -14,7 +14,7 @@ from prompt_toolkit.document import Document
 from rich.table import Table
 from rich.text import Text
 
-from .. import config, store, teams
+from .. import budget, config, store, teams
 from ..config import Settings
 from ..render import tilde
 from ..engine import Engine, resolve_roles, role_for
@@ -814,6 +814,7 @@ async def cmd_status(app: "App", args: list[str]) -> None:
     t.add_row("Judge", f"{NAMES[s.judge]} · auto verdict {'on' if s.auto_verdict else 'off'}")
     t.add_row("Progress", f"{'on' if s.progress else 'off'} · every {s.progress_every} turns · keeper "
                           f"{s.progress_keeper}" + ("" if s.perms != "none" else " (needs /perms edits or auto)"))
+    t.add_row("Budget", budget.describe(_settings_budget(s)))
     t.add_row("Timeouts", f"{s.idle_timeout}s without output · {s.timeout}s per call")
     lim = app.adapters["claude"].limits
     if lim and lim.get("five_hour") is not None:
@@ -833,6 +834,9 @@ async def cmd_status(app: "App", args: list[str]) -> None:
             lv = st["last_verify"]
             t.add_row("  Last verify", f"{'passed' if lv['ok'] else 'failed (exit ' + str(lv['code']) + ')'} "
                                        f"at turn {lv['turn']}")
+        used = app.engine.budget_status()
+        if used:
+            t.add_row("  Budget", ", ".join(used))
         if st.get("progress"):
             t.add_row("  Progress", f"PROGRESS.md kept by {NAMES.get(st.get('progress_keeper') or '', '—')} · "
                                     f"last changed at turn {st.get('progress_hash_turn', 0)}")
@@ -1091,6 +1095,54 @@ async def cmd_progress(app: "App", args: list[str]) -> None:
         return
     app.console.print(Text(meta, style="dim"))
     app.console.print(Markdown(text))
+
+
+def _budget_args(app, done):
+    if not done:
+        return ["30m", "1h", "2h", "50", "usage", "cost", "time", "turns", "off"]
+    if done[-1] in ("usage",):
+        return ["70%", "80%", "90%", "off"]
+    if done[-1] in ("cost",):
+        return ["$2", "$5", "$10", "off"]
+    if done[-1] in ("time",):
+        return ["30m", "1h", "2h", "off"]
+    if done[-1].isdigit():
+        return ["turns"]
+    return []
+
+
+@command("budget", "Limits for a conversation: time, turns, Claude usage, cost (pauses cleanly)",
+         "[30m|2h|50 turns|usage 80%|cost $5|off]", args=_budget_args)
+async def cmd_budget(app: "App", args: list[str]) -> None:
+    s, eng = app.settings, app.engine
+    if not args:
+        app.info(f"Budget for new conversations: {budget.describe(_settings_budget(s))}")
+        if eng:
+            used = eng.budget_status()
+            app.info("This conversation: " + (budget.describe(eng.state["budget"])
+                     + ("  ·  used: " + ", ".join(used) if used else "")))
+        app.console.print(Text("Examples: /budget 30m · /budget 2h 50 turns · /budget usage 80% · "
+                               "/budget cost $5 · /budget turns off · /budget off", style="dim"))
+        return
+    try:
+        changes = budget.parse(" ".join(args))
+    except ValueError as e:
+        app.warn(str(e))
+        return
+    for k, v in changes.items():
+        setattr(s, f"budget_{k}", float(v) if k == "cost" else int(v))
+    msg = f"Budget → {budget.describe(_settings_budget(s))}"
+    if eng:
+        eng.state["budget"].update({k: (float(v) if k == "cost" else int(v)) for k, v in changes.items()})
+        eng.save()
+        msg += " (this conversation too; checked between turns)"
+        if not app.running() and (hit := eng.budget_hit()):
+            msg += f"\n  Already reached: {hit[1]}."
+    app.info(msg)
+
+
+def _settings_budget(s) -> dict:
+    return {"minutes": s.budget_minutes, "turns": s.budget_turns, "usage": s.budget_usage, "cost": s.budget_cost}
 
 
 @command("summary", "Write a verdict (debates) or summary of this conversation", "[claude|agy]",

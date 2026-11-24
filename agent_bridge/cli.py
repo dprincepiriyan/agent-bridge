@@ -54,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the automatic verdict when a debate ends")
     ap.add_argument("--no-notify", dest="notify", action="store_false", default=None,
                     help="no desktop notification when the run ends")
+    ap.add_argument("--budget-minutes", type=int, metavar="N", help="pause after N minutes of agent time")
+    ap.add_argument("--budget-turns", type=int, metavar="N", help="hard cap on total turns, even across --resume")
+    ap.add_argument("--budget-usage", type=int, metavar="PCT", help="pause when Claude's 5-hour usage reaches PCT%%")
+    ap.add_argument("--budget-cost", type=float, metavar="USD", help="pause at this API-equivalent cost")
     ap.add_argument("--no-progress", dest="progress", action="store_false", default=None,
                     help="don't keep a shared PROGRESS.md (default: on when agents can edit files)")
     ap.add_argument("--progress-every", type=int, metavar="N", help="show PROGRESS.md every N turns (default 4)")
@@ -77,7 +81,8 @@ def apply_args(s: config.Settings, args: argparse.Namespace) -> None:
                 "max_words", "stop_token", "claude_model", "claude_effort", "agy_model", "agy_effort",
                 "idle_timeout", "verify", "verify_timeout", "checkpoints", "judge", "auto_verdict", "notify",
                 "claude_role", "claude_role_text", "agy_role", "agy_role_text",
-                "progress", "progress_every", "progress_keeper"):
+                "progress", "progress_every", "progress_keeper",
+                "budget_minutes", "budget_turns", "budget_usage", "budget_cost"):
         v = getattr(args, key, None)
         if v is not None:
             setattr(s, key, v)
@@ -133,6 +138,9 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
                     "checkpoints", "auto_verdict", "progress_every"):
             if (v := getattr(args, key, None)) is not None:
                 st[key] = v
+        for kind in ("minutes", "turns", "usage", "cost"):
+            if (v := getattr(args, f"budget_{kind}", None)) is not None:
+                st["budget"][kind] = v
     else:
         if s.workdir and s.perms != "none":
             console.print(f"[yellow]⚠ agents may modify files in {s.workdir}[/]")

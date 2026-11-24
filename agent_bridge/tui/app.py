@@ -151,6 +151,9 @@ class App:
         lim = self.adapters["claude"].limits
         if lim and lim.get("five_hour") is not None:
             parts += [sep, ("class:tb.claude", f"5h {lim['five_hour']:.0%}")]
+        if self.engine and (used := self.engine.budget_status()):
+            parts += [sep, ("class:tb.hint", "⏱ " + " ".join(u.split(" ", 1)[-1] if u.startswith(("time", "turns"))
+                                                            else u for u in used))]
         if self.engine:
             st = self.engine.state
             parts += [sep, ("", f"turn {st['turn']}/{st['max_turns']}")]

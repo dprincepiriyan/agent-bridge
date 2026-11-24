@@ -82,3 +82,40 @@ def test_budget_notifies_even_for_short_runs():
     n(Event("run_start"))
     n(Event("done", data={"reason": "budget", "message": "50 turns used (budget 50)", "topic": "pong"}))
     assert sent and sent[0][0] == "⏸ Budget reached" and "50 turns used" in sent[0][1]
+
+
+def test_parse_phrases():
+    from agent_bridge.budget import parse, describe
+    assert parse("30m") == {"minutes": 30}
+    assert parse("2h") == {"minutes": 120}
+    assert parse("1h30m") == parse("1h 30m") == parse("1 h 30 min") == {"minutes": 90}
+    assert parse("50 turns") == parse("turns 50") == parse("50t") == {"turns": 50}
+    assert parse("usage 80%") == parse("80%") == {"usage": 80}
+    assert parse("cost $5") == {"cost": 5.0} and parse("$2.5") == {"cost": 2.5}
+    assert parse("cost 2.5") == {"cost": 2.5}
+    assert parse("2h 50 turns usage 80%") == {"minutes": 120, "turns": 50, "usage": 80}
+    assert parse("off") == {"minutes": 0, "turns": 0, "usage": 0, "cost": 0}
+    assert parse("time off") == {"minutes": 0} and parse("turns off") == {"turns": 0}
+    assert describe({"minutes": 90, "turns": 50, "usage": 80, "cost": 5.0}) == \
+        "time 1h30m · 50 turns · Claude 5h usage 80% · cost $5"
+    import pytest
+    for bad in ("banana", "usage 150%", "cost", "turns -3"):
+        with pytest.raises(ValueError):
+            parse(bad)
+
+
+def test_cli_budget_flags_and_resume(monkeypatch):
+    import agent_bridge.cli as cli
+    seen = {}
+    monkeypatch.setattr(cli, "run_headless", lambda s, args: seen.update(s=s) or 0)
+    assert cli.main(["x", "--budget-minutes", "30", "--budget-usage", "80", "--budget-cost", "2.5"]) == 0
+    s = seen["s"]
+    assert (s.budget_minutes, s.budget_usage, s.budget_cost) == (30, 80, 2.5)
+
+
+def test_teams_carry_budgets():
+    from agent_bridge import teams
+    teams.save_team("night", Settings(budget_minutes=120, budget_cost=3.0))
+    t = Settings()
+    teams.apply_team(t, teams.load_team("night"))
+    assert t.budget_minutes == 120 and t.budget_cost == 3.0

@@ -18,6 +18,7 @@ TEAM_FIELDS = (
     "claude_model", "claude_effort", "agy_model", "agy_effort",
     "perms", "turns", "max_words", "verify", "checkpoints",
     "progress", "progress_every", "progress_keeper", "judge", "auto_verdict",
+    "budget_minutes", "budget_turns", "budget_usage", "budget_cost",
 )
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 RESERVED = {*TEAMS, CUSTOM, "save", "delete", "list"}

@@ -441,3 +441,28 @@ def test_mode_save_load_delete(monkeypatch):
         await wait_for(lambda: teams.list_teams() == [])
 
     run_script(monkeypatch, script)
+
+
+def test_budget_command(monkeypatch):
+    async def script(app, inp):
+        inp.send_text("/budget\r")
+        inp.send_text("/budget 3 turns usage 80%\r")
+        await wait_for(lambda: app.settings.budget_turns == 3 and app.settings.budget_usage == 80)
+        inp.send_text("/budget nonsense\r")
+        inp.send_text("/turns 10\r")
+        inp.send_text("go\r")
+        await wait_for(lambda: app.engine is not None)
+        await wait_for(lambda: not app.running())
+        assert app.engine.state["turn"] == 3
+        inp.send_text("keep going\r")  # continuing is still capped
+        await wait_for(lambda: not app.running())
+        await asyncio.sleep(0.2)
+        assert app.engine.state["turn"] == 3
+        inp.send_text("/budget turns off\r")
+        await wait_for(lambda: app.engine.state["budget"]["turns"] == 0)
+        inp.send_text("/continue 1\r")
+        await wait_for(lambda: app.engine.state["turn"] > 3)
+        await wait_for(lambda: not app.running())
+
+    app = run_script(monkeypatch, script)
+    assert app.settings.budget_usage == 80 and app.engine.state["budget"]["usage"] == 80
