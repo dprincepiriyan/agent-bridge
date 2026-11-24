@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="agent-bridge", description="Let Claude Code and Antigravity talk to each other.",
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=EPILOG)
     ap.add_argument("topic", nargs="?", help="topic or task (omit for the interactive app)")
-    ap.add_argument("-P", "--preset", "--mode", dest="preset", choices=MODES, help="type of work")
+    ap.add_argument("-P", "--preset", "--mode", dest="preset", choices=MODES, help="team preset (type of work)")
+    ap.add_argument("-T", "--team", metavar="NAME", help="load a team you saved with /mode save (flags still win)")
     ap.add_argument("--role-a", help="custom role for the agent that speaks first")
     ap.add_argument("--role-b", help="custom role for the agent that speaks second")
     ap.add_argument("-f", "--first", choices=AGENTS)
@@ -160,6 +161,13 @@ def main(argv: list[str] | None = None) -> int:
     load_user_roles()  # so --claude-role/--agy-role accept your own roles (warnings come from config.load)
     args = build_parser().parse_args(argv)
     s, warnings = config.load()
+    if args.team:
+        from . import teams
+        if args.team not in teams.list_teams():
+            saved = ", ".join(teams.list_teams()) or "none yet — save one with /mode save <name>"
+            print(f"agent-bridge: no saved team '{args.team}' (saved: {saved})", file=sys.stderr)
+            return 2
+        warnings += teams.apply_team(s, teams.load_team(args.team))
     apply_args(s, args)
     warnings += s.validate()
     for w in warnings:

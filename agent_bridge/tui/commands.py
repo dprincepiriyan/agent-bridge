@@ -14,7 +14,7 @@ from prompt_toolkit.document import Document
 from rich.table import Table
 from rich.text import Text
 
-from .. import config, store
+from .. import config, store, teams
 from ..config import Settings
 from ..render import tilde
 from ..engine import Engine, resolve_roles, role_for
@@ -258,26 +258,67 @@ def _live_roles(app: "App") -> str:
 
 
 def _mode_args(app, done):
-    return list(MODES) if not done else []
+    saved = teams.list_teams()
+    if not done:
+        return [*MODES, *saved, "save", "delete"]
+    if done == ["delete"]:
+        return saved
+    return []
 
 
 @command("mode", "Team preset: who does what (build-review, orchestrated, design-build, debate…)", "[mode]",
          args=_mode_args)
 async def cmd_mode(app: "App", args: list[str]) -> None:
     s = app.settings
+    saved = teams.list_teams()
+    if args and args[0].lower() == "save":
+        await _save_team(app, " ".join(args[1:]))  # whole rest, so "My Team" is rejected, not cut to "my"
+        return
+    if args and args[0].lower() == "delete":
+        name = args[1].lower() if len(args) > 1 else await pick(
+            "Delete which saved team?", [(n, n, teams.describe_saved(n)) for n in saved])
+        if not name:
+            return
+        if name not in saved:
+            app.warn(f"No saved team named {name}.")
+            return
+        if await confirm(f"Delete the saved team '{name}'?"):
+            teams.delete_team(name)
+            app.info(f"Deleted team {name}.")
+        return
     if args:
         choice = args[0].lower()
-        if choice not in MODES:
-            app.warn(f"Mode must be one of: {', '.join(MODES)}")
+        if choice not in MODES and choice not in saved:
+            app.warn(f"Unknown mode or team. Built-in: {', '.join(MODES)}"
+                     + (f" · yours: {', '.join(saved)}" if saved else "") + " · /mode save <name> to save one")
             return
     else:
         first, second = s.first, _other(s.first)
         opts = [(k, k, f"{t.summary} — {NAMES[first]}: {ROLES[t.first].name}, {NAMES[second]}: "
                        f"{ROLES[t.second].name}") for k, t in TEAMS.items()]
         opts.append((CUSTOM, CUSTOM, "pick each agent's role yourself (/role)"))
+        opts += [(f"__team__{n}", f"★ {n}", teams.describe_saved(n)) for n in saved]
+        opts.append(("__save__", "＋ save the current setup as a team…", teams.describe(s)))
         choice = await pick("Team preset (roles follow who speaks first; /first to flip)", opts, s.preset)
         if choice is None:
             return
+        if choice == "__save__":
+            await _save_team(app, "")
+            return
+        if choice.startswith("__team__"):
+            choice = choice[len("__team__"):]
+    if choice in saved and choice not in MODES:
+        try:
+            warn = teams.apply_team(s, teams.load_team(choice))
+        except (OSError, ValueError) as e:
+            app.warn(f"Couldn't load team {choice}: {e}")
+            return
+        for w in warn:
+            app.warn(w)
+        app.info(f"Team {choice} loaded → {teams.describe(s)}")
+        if app.engine:
+            app.info("Applies to new conversations (/new). To change roles in this conversation, use /role.")
+        return
     s.preset = choice
     s.role_a = s.role_b = ""
     if choice == CUSTOM:
@@ -289,6 +330,20 @@ async def cmd_mode(app: "App", args: list[str]) -> None:
     app.info(f"Mode → {choice}  ({assignment(app)})")
     if app.engine:
         app.info("Applies to new conversations (/new). To change roles in this conversation, use /role.")
+
+
+async def _save_team(app: "App", name: str) -> None:
+    name = (name or await ask_text("Team name (e.g. my-java-team): ") or "").strip()
+    if not name:
+        return
+    if not teams.valid_name(name):
+        app.warn("Use lowercase letters, digits, '-' or '_', and not a built-in mode name.")
+        return
+    if name in teams.list_teams() and not await confirm(f"Team '{name}' exists. Overwrite it?"):
+        return
+    path = teams.save_team(name, app.settings)
+    app.info(f"Saved team {name} → {tilde(path)}\n  {teams.describe(app.settings)}\n"
+             f"  Load it with /mode {name}  (or abr --team {name})")
 
 
 async def _choose_role(app: "App", agent: str) -> bool:
@@ -352,7 +407,7 @@ def _role_args(app, done):
 async def cmd_role(app: "App", args: list[str]) -> None:
     s = app.settings
     if args and args[0].lower() in ("create", "new"):
-        await _create_role(app, args[1] if len(args) > 1 else "")
+        await _create_role(app, " ".join(args[1:]))
         return
     if args and args[0].lower() == "reload":
         warn = load_user_roles()
@@ -396,7 +451,7 @@ async def _create_role(app: "App", key: str = "") -> None:
     import re
     say = app.info
     say(f"New role — saved as a Markdown file in {tilde(roles_dir())} (edit it any time). Esc cancels.")
-    key = (key or await ask_text("Role id (e.g. game-dev): ") or "").strip().lower()
+    key = (key or await ask_text("Role id (e.g. game-dev): ") or "").strip()
     if not key:
         return
     if not re.match(ROLE_KEY_RE, key) or key in (CUSTOM, "create", "new", "reload", "swap", "mode"):

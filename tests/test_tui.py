@@ -413,3 +413,31 @@ def test_role_create_and_assign(monkeypatch):
     assert "game-dev" in USER_ROLES
     text = (roles_dir() / "game-dev.md").read_text()
     assert text.startswith("---\nname: Game dev v2")
+
+
+def test_mode_save_load_delete(monkeypatch):
+    from agent_bridge import teams
+
+    async def script(app, inp):
+        inp.send_text("/role agy orchestrator\r")
+        inp.send_text("/model claude opus\r")
+        inp.send_text("/turns 20\r")
+        await wait_for(lambda: app.settings.turns == 20)
+        inp.send_text("/mode save pong-crew\r")
+        await wait_for(lambda: "pong-crew" in teams.list_teams())
+        inp.send_text("/mode debate\r")
+        await wait_for(lambda: app.settings.preset == "debate")
+        inp.send_text("/model claude default\r")
+        await wait_for(lambda: app.settings.claude_model == "")
+        inp.send_text("/mode pong-crew\r")
+        await wait_for(lambda: app.settings.claude_model == "opus")
+        assert app.settings.agy_role == "orchestrator" and app.settings.claude_role == "coder"
+        inp.send_text("/mode save Bad Name\r")  # rejected (spaces, capitals), nothing saved
+        await asyncio.sleep(0.3)
+        assert teams.list_teams() == ["pong-crew"]
+        inp.send_text("/mode delete pong-crew\r")
+        await asyncio.sleep(0.3)
+        inp.send_text("2")  # confirm picker lists No first (safe default); 2 = Yes
+        await wait_for(lambda: teams.list_teams() == [])
+
+    run_script(monkeypatch, script)
