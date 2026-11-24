@@ -131,3 +131,9 @@ Deviation: `install.sh` falls back to a private virtual environment when `uv` is
 
 - [x] Shared progress memory: seeded `PROGRESS.md`, a keeper (lead role or first speaker), shown every N turns
       and on resume, nudges when missing/stale, included in `/summary`; `/progress` and CLI flags.
+
+## v0.8.0
+
+- [x] Your own roles as Markdown files (`/role create`, `/role reload`), usable everywhere, can replace built-ins.
+- [x] Saved teams (`/mode save`, `/mode <name>`, `/mode delete`, `--team`) — roles, models, settings, budgets.
+- [x] Run budgets (`/budget`, `--budget-*`): time, total turns, Claude 5-hour usage, cost; checked between turns.

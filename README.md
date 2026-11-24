@@ -31,7 +31,7 @@ With a Claude Pro/Max subscription and no `ANTHROPIC_API_KEY` set, Claude turns 
 
 ```
 $ agent-bridge
-╭─ agent-bridge v0.7.0 ──────────────────────────────────────────────╮
+╭─ agent-bridge v0.8.0 ──────────────────────────────────────────────╮
 │ Claude: default   Antigravity: gemini-3.8-flash-low                │
 │ Mode: debate · Turns: 8 · Perms: none · Dir: per-run workspace     │
 ╰────────────────────────────────────────────────────────────────────╯
@@ -54,9 +54,10 @@ Antigravity, I'll take the first position: Go is the better choice…
 | `/help` | List all commands |
 | `/model [agent] [model]` | Pick a model per agent. Accepts IDs or names, e.g. `/model agy Gemini 4 Argon (High)` or `/model agy argon high`; ambiguous names open a picker |
 | `/effort [agent] [level]` | Reasoning effort: low, medium, high, xhigh, max |
-| `/role [agent] [role]` | Give an agent a role (`/role agy orchestrator`), or `/role swap`; works mid-conversation too |
+| `/role [agent] [role]` | Give an agent a role (`/role agy orchestrator`), `/role swap`, `/role create` (your own, saved as a file), `/role reload`; works mid-conversation too |
 | `/roles` | Show who does what and every available role |
-| `/mode [mode]` | Team preset: `build-review`, `orchestrated`, `design-build`, `build-test`, `secure-build`, `plan`, `debate`, `brainstorm`, `custom` |
+| `/mode [mode]` | Team preset: `build-review`, `orchestrated`, `design-build`, `build-test`, `secure-build`, `plan`, `debate`, `brainstorm`, `custom`, or one of your saved teams. `/mode save <name>` · `/mode delete <name>` |
+| `/budget [limits]` | Hard caps per conversation: `30m`, `2h`, `50 turns`, `usage 80%` (Claude 5-hour window), `cost $5`, `off` |
 | `/turns [n]` | Max turns for this conversation and the default for new ones |
 | `/first [agent]` | Who speaks first |
 | `/perms [level]` | `none` (talk only) · `edits` (auto-accept file edits) · `auto` (edits + commands) |
@@ -125,6 +126,25 @@ abr "Build a ping pong game" --agy-role orchestrator --claude-role coder --perms
 - **Mid-conversation changes:** both agents are told about the switch on their next turn.
 - **`/init`:** asks "who does what?" (e.g. *Antigravity orchestrates · Claude codes*).
 
+### Your own roles
+
+Write a role once and it shows up everywhere next to the built-ins (★ in `/role`, "(yours)" in `/roles`, in completions, and accepted by `--claude-role` / `--agy-role`). Use `/role create`, or drop a Markdown file in `~/.config/agent-bridge/roles/`:
+
+```markdown
+---
+name: Game developer
+summary: Pygame, 60 fps, simple art
+---
+You build games in Python with Pygame. Keep a steady 60 fps, separate game state from rendering,
+and make it playable with the keyboard. Run the game loop headless in tests.
+```
+
+The file name is the role id (`game-dev.md` → `/role claude game-dev`). A file named after a built-in role (e.g. `coder.md`) replaces it. Run `/role reload` after editing.
+
+### Saved teams
+
+Found a setup you like? `/mode save my-java-team` stores the roles, who opens, models, efforts, permissions, turns, verify command, progress settings and budgets in `~/.config/agent-bridge/teams/my-java-team.toml`. It doesn't store the project folder, so a team works on any project. Load it with `/mode my-java-team` (it's also listed in the `/mode` menu) or `abr --team my-java-team`; flags still override it.
+
 ## Safety nets for long runs
 
 - **Verification.** Set a command with `/verify pytest -q` or `--verify "pytest -q"`. When both agents say `[[DONE]]`, the bridge runs it in the workdir. If it fails, its output goes back to the agents and the conversation continues until it passes or the turns run out. Both agents are told about the check up front.
@@ -132,6 +152,7 @@ abr "Build a ping pong game" --agy-role orchestrator --claude-role coder --perms
 - **Stuck detection.** An agent is stopped after 10 minutes without any output (`--idle-timeout`) or 60 minutes in total (`--timeout`), then retried.
 - **Usage limits.** When Claude or Antigravity reports a usage limit, the run pauses immediately with the reset time, without wasting retries. `/continue` picks up exactly there. The status bar shows Claude's 5-hour window usage.
 - **Shared progress memory.** In runs where agents can edit files, the bridge creates `PROGRESS.md` (Goal, Done, In progress, Next, Decisions, Open issues). One agent keeps it updated: the lead role (orchestrator, architect or product manager), otherwise the first speaker. Every 4 turns, and whenever a run resumes, the bridge shows the current file to the agent about to speak, so the plan survives the CLIs compressing their own history. The keeper is nudged if the file goes missing or stale. `/summary` reads it too. Configure it with `/progress every 2`, `/progress keeper claude` or `/progress off` (`--no-progress`).
+- **Budgets.** `/budget 2h 50 turns usage 80%` puts hard caps on a conversation: agent time, total turns (even when you keep continuing), Claude's 5-hour usage window, and API-equivalent cost. They're checked between turns, so a run never stops mid-edit. When one is reached it pauses with a message and a notification, and you can raise it (or `/budget off`) and `/continue`. The status bar shows used/limit.
 - **Notifications.** When a run that took more than 30 seconds ends on its own (agreed, turn limit, verification failed, usage limit, error), you get a desktop notification via `notify-send`, so you can walk away from long builds. Your own Esc or `/pause` never notifies. Use `/notify off` or `--no-notify` to turn them off.
 - **Visible work.** Tool steps name their target ("⚙ Edit src/Bank.java", "⚙ Run mvn -q test"), and `/diff` shows each turn's code changes from its checkpoint.
 - **Verdicts.** When a debate ends, a fresh judge call (Claude by default; `/judge agy` to switch) reads the transcript and writes a verdict: winner, strongest arguments, common ground and weak spots. `/summary` works for any conversation, at any time.
