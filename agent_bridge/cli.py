@@ -150,7 +150,7 @@ def run_headless(s: config.Settings, args: argparse.Namespace) -> int:
     console.print(f"[dim]Transcript: {tilde(engine.run_dir / 'transcript.md')}"
                   + (f"  ·  Claude ~${cost:.3f} API-equivalent (covered by a subscription)" if cost else "") + "[/]",
                   soft_wrap=True)
-    if reason in ("limit", "paused", "error", "verify_failed", "usage_limit"):
+    if reason in ("limit", "paused", "error", "verify_failed", "usage_limit", "budget"):
         console.print(f"[dim]Continue with: agent-bridge --resume {tilde(engine.run_dir)} -n {engine.state['turn'] + 4}[/]",
                       soft_wrap=True)
     return {"error": 1, "verify_failed": 1, "usage_limit": 3}.get(reason, 0)

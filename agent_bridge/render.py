@@ -161,6 +161,8 @@ class Renderer:
                 "verify_failed": ("✗ Agents said done, but verification failed and no turns are left. "
                                   "Progress saved.", "red"),
                 "usage_limit": (usage_limit_msg(ev.data), "bold yellow"),
+                "budget": (f"⏸ Budget reached: {ev.data.get('message', '')}. Progress saved — raise it with "
+                           f"/budget (or /budget off), then /continue.", "bold yellow"),
             }[r]
             self.c.print()
             self.c.print(Text(msg, style=style))

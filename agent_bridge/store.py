@@ -49,6 +49,7 @@ V3_DEFAULTS = {
     # shared progress memory; off for runs created before it existed
     "progress": False, "progress_every": 4, "progress_keeper": "auto", "progress_last_shown": None,
     "progress_hash": None, "progress_hash_turn": 0,
+    "budget": {"minutes": 0, "turns": 0, "usage": 0, "cost": 0.0}, "active_secs": 0.0,
 }
 
 
@@ -65,7 +66,7 @@ def upgrade(state: dict) -> dict:
         state.setdefault("last_speaker", None)
         state["version"] = 2
     for k, v in V3_DEFAULTS.items():  # always: fills fields for new and old states alike
-        state.setdefault(k, list(v) if isinstance(v, list) else v)
+        state.setdefault(k, list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v)
     if state["version"] < SCHEMA:
         # v0.1/0.2 per-run workspaces live inside the run dir
         state["own_workspace"] = state["own_workspace"] or str(state.get("workdir", "")).startswith(

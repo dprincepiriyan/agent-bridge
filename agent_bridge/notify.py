@@ -53,7 +53,7 @@ class Notifier:
         reason = d.get("reason")
         if reason in ("interrupted", "paused"):
             return
-        if time.monotonic() - self.started < self.min_secs() and reason not in ("usage_limit", "error"):
+        if time.monotonic() - self.started < self.min_secs() and reason not in ("usage_limit", "error", "budget"):
             return
         topic = _short(d.get("topic", ""))
         title, urgency = {
@@ -62,8 +62,11 @@ class Notifier:
             "verify_failed": ("✗ Verification failed — no turns left", "critical"),
             "usage_limit": (f"⏸ {NAMES.get(d.get('agent') or '', 'An agent')} hit its usage limit", "critical"),
             "error": ("✗ Run stopped with an error", "critical"),
+            "budget": ("⏸ Budget reached", "normal"),
         }.get(reason, (f"Run ended ({reason})", "normal"))
         body = topic
+        if reason == "budget":
+            body = f"{d.get('message', '')}. {topic}"
         if reason == "usage_limit" and (when := fmt_reset(d.get("resets_at"))):
             body = f"Resets at {when}. {topic}"
         self.sender(title, body, urgency)

@@ -217,7 +217,7 @@ class App:
             if reason == "agreed":
                 self.console.print(Text("Type a message to keep going in this conversation, or /new for a new topic.",
                                         style="dim"))
-            elif reason in ("limit", "paused", "error", "verify_failed", "usage_limit"):
+            elif reason in ("limit", "paused", "error", "verify_failed", "usage_limit", "budget"):
                 self.console.print(Text("Type a message to steer, /continue for more turns, or /new.", style="dim"))
         if self.engine:
             self.console.print(Text(f"Transcript: {tilde(self.engine.run_dir / 'transcript.md')}", style="dim"), soft_wrap=True)

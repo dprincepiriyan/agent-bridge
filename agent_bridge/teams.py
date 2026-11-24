@@ -61,8 +61,8 @@ def apply_team(s: Settings, data: dict) -> list[str]:
     types = {f.name: str(f.type) for f in fields(Settings)}
     warn = []
     for k, v in data.items():
-        expected = {"int": int, "bool": bool}.get(types.get(k, "str"), str)
-        if not isinstance(v, expected) or (expected is int and isinstance(v, bool)):
+        expected = {"int": int, "bool": bool, "float": (int, float)}.get(types.get(k, "str"), str)
+        if not isinstance(v, expected) or (expected is not bool and isinstance(v, bool)):
             warn.append(f"team: {k} has the wrong type; ignored")
             continue
         setattr(s, k, v)

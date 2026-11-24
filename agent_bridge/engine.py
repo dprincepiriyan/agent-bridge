@@ -121,6 +121,8 @@ def new_state(s: Settings, topic: str) -> dict:
         "auto_verdict": s.auto_verdict,
         "progress": s.progress and s.perms != "none", "progress_every": s.progress_every,
         "progress_keeper": progress_keeper(s.progress_keeper, {a: agents[a]["role_key"] for a in AGENTS}, first),
+        "budget": {"minutes": s.budget_minutes, "turns": s.budget_turns, "usage": s.budget_usage,
+                   "cost": float(s.budget_cost)},
     }
     store.upgrade(state)
     store.save_state(state)
@@ -199,6 +201,7 @@ class Engine:
         self._turn_cut = False
         self._progress_resume = False
         self._progress_shown = False
+        self._clock: float | None = None
 
     @classmethod
     def new(cls, s: Settings, topic: str, adapters, emit=None) -> "Engine":
@@ -284,6 +287,45 @@ class Engine:
     def set(self, **kw) -> None:
         self.state.update(kw)
         self.save()
+
+    # ---- budgets --------------------------------------------------------------
+    def _tick_time(self) -> None:
+        now = time.monotonic()
+        if self._clock is not None:
+            self.state["active_secs"] = self.state.get("active_secs", 0.0) + (now - self._clock)
+        self._clock = now if self.running else None
+
+    def budget_hit(self) -> tuple[str, str] | None:
+        """(which, explanation) if a budget is used up, else None. Checked between turns."""
+        s = self.state
+        b = s.get("budget") or {}
+        if b.get("turns") and s["turn"] >= b["turns"]:
+            return "turns", f"{s['turn']} turns used (budget {b['turns']})"
+        if b.get("minutes") and s.get("active_secs", 0) >= b["minutes"] * 60:
+            return "minutes", f"{s['active_secs'] / 60:.0f} min of agent time used (budget {b['minutes']}m)"
+        if b.get("cost") and self.cost >= b["cost"]:
+            return "cost", f"~${self.cost:.2f} API-equivalent used (budget ${b['cost']:g})"
+        lim = getattr(self.adapters.get("claude"), "limits", None) or {}
+        if b.get("usage") and lim.get("five_hour") is not None and lim["five_hour"] * 100 >= b["usage"]:
+            return "usage", f"Claude's 5-hour usage window is at {lim['five_hour']:.0%} (budget {b['usage']}%)"
+        return None
+
+    def budget_status(self) -> list[str]:
+        """Human-readable 'used / limit' for each active budget."""
+        s = self.state
+        b = s.get("budget") or {}
+        out = []
+        if b.get("minutes"):
+            out.append(f"time {s.get('active_secs', 0) / 60:.0f}/{b['minutes']}m")
+        if b.get("turns"):
+            out.append(f"turns {s['turn']}/{b['turns']}")
+        if b.get("usage"):
+            lim = getattr(self.adapters.get("claude"), "limits", None) or {}
+            cur = f"{lim['five_hour']:.0%}" if lim.get("five_hour") is not None else "?"
+            out.append(f"Claude 5h {cur}/{b['usage']}%")
+        if b.get("cost"):
+            out.append(f"cost ${self.cost:.2f}/${b['cost']:g}")
+        return out
 
     # ---- shared progress memory -----------------------------------------------
     @property
@@ -603,6 +645,7 @@ class Engine:
         self._pause = False
         self._turn_cut = False
         self.running = True
+        self._clock = time.monotonic()
         self.emit(Event("run_start", data={"run_dir": s["run_dir"], "workdir": s["workdir"]}))
         reason, detail = "limit", {}
         try:
@@ -612,6 +655,11 @@ class Engine:
             while s["turn"] < s["max_turns"]:
                 if self._pause:
                     reason = "paused"
+                    break
+                self._tick_time()
+                if hit := self.budget_hit():
+                    reason, detail = "budget", {"budget": hit[0], "message": hit[1]}
+                    store.append_transcript(s, f"\n> _Budget reached: {hit[1]}._\n")
                     break
                 speaker, reply = await self._take_turn()
                 await self._checkpoint(s["turn"], speaker)
@@ -657,7 +705,9 @@ class Engine:
         return reason
 
     def _finish(self, reason: str, detail: dict | None = None) -> None:
+        self._tick_time()
         self.running = False
+        self._clock = None
         self.current = None
         self.save()
         if reason == "agreed":

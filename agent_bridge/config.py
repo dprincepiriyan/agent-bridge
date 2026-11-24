@@ -67,6 +67,10 @@ class Settings:
     progress: bool = True     # shared PROGRESS.md memory (needs file permissions: edits/auto)
     progress_every: int = 4   # show it to the speaking agent every N turns
     progress_keeper: str = "auto"  # who maintains it: auto (lead role / first speaker), claude, agy
+    budget_minutes: int = 0   # pause once agents have worked this long in a conversation (0 = no limit)
+    budget_turns: int = 0     # hard cap on total turns, even when you keep continuing
+    budget_usage: int = 0     # pause when Claude's 5-hour usage window reaches this percent
+    budget_cost: float = 0.0  # pause at this API-equivalent cost in dollars
 
     def validate(self) -> list[str]:
         """Fix invalid values in place; return warnings."""
@@ -98,6 +102,13 @@ class Settings:
                 reset(name, "must be a positive integer")
         if not isinstance(self.retries, int) or self.retries < 0:
             reset("retries", "must be >= 0")
+        for name in ("budget_minutes", "budget_turns"):
+            if not isinstance(getattr(self, name), int) or getattr(self, name) < 0:
+                reset(name, "must be 0 (off) or a positive integer")
+        if not isinstance(self.budget_usage, int) or not 0 <= self.budget_usage <= 100:
+            reset("budget_usage", "must be a percent from 0 (off) to 100")
+        if not isinstance(self.budget_cost, (int, float)) or self.budget_cost < 0:
+            reset("budget_cost", "must be 0 (off) or a positive number")
         if not self.stop_token.strip():
             reset("stop_token", "must not be empty")
         return warn
@@ -120,9 +131,9 @@ def load() -> tuple[Settings, list[str]]:
         if k not in types:
             warn.append(f"config: unknown key {k!r} ignored")
             continue
-        expected = {"int": int, "bool": bool}.get(str(types[k]), str)
-        if not isinstance(v, expected) or (expected is int and isinstance(v, bool)):
-            warn.append(f"config: {k} should be {expected.__name__}; ignored")
+        expected = {"int": int, "bool": bool, "float": (int, float)}.get(str(types[k]), str)
+        if not isinstance(v, expected) or (expected is not bool and isinstance(v, bool)):
+            warn.append(f"config: {k} should be {getattr(expected, '__name__', 'a number')}; ignored")
             continue
         setattr(s, k, v)
     warn += s.validate()
@@ -134,8 +145,8 @@ def dumps(s: Settings) -> str:
     for k, v in asdict(s).items():
         if isinstance(v, bool):
             val = "true" if v else "false"
-        elif isinstance(v, int):
-            val = str(v)
+        elif isinstance(v, (int, float)):
+            val = repr(float(v)) if isinstance(v, float) else str(v)
         else:
             val = json.dumps(v, ensure_ascii=False)
         lines.append(f"{k} = {val}")
